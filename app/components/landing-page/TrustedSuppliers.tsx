@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { landingImages } from "../../lib/images";
 
 const supplierData = [
@@ -20,9 +21,11 @@ const supplierData = [
 
 export default function TrustedSuppliers() {
   return (
-    <section className="bg-gradient-to-b from-white to-gray-50/50 py-28">
+    <section
+      id="suppliers"
+      className="bg-gradient-to-b from-white to-gray-50/50 py-28 scroll-mt-16"
+    >
       <div className="max-w-7xl mx-auto px-6">
-        
         {/* Section header */}
         <div className="max-w-2xl mx-auto text-center">
           <p className="text-sm font-semibold uppercase tracking-widest text-[#EA7B7B] mb-3">
@@ -35,8 +38,8 @@ export default function TrustedSuppliers() {
             </span>
           </h2>
           <p className="mt-5 text-lg md:text-xl text-gray-500 leading-relaxed max-w-xl mx-auto">
-            Discover reliable raw-material suppliers across industries,
-            all verified and ready to do business.
+            Discover reliable raw-material suppliers across industries, all
+            verified and ready to do business.
           </p>
         </div>
 
@@ -84,10 +87,15 @@ export default function TrustedSuppliers() {
 
         {/* CTA */}
         <div className="mt-20 text-center">
-          <button className="group bg-[#EA7B7B] hover:bg-[#d96a6a] text-white px-10 py-4 rounded-full font-semibold transition-all duration-300 shadow-lg shadow-[#EA7B7B]/25 hover:shadow-xl hover:shadow-[#EA7B7B]/30 hover:-translate-y-0.5">
+          <Link
+            href="/login"
+            className="group inline-block bg-[#EA7B7B] hover:bg-[#d96a6a] text-white px-10 py-4 rounded-full font-semibold transition-all duration-300 shadow-lg shadow-[#EA7B7B]/25 hover:shadow-xl hover:shadow-[#EA7B7B]/30 hover:-translate-y-0.5"
+          >
             Browse all suppliers
-            <span className="inline-block ml-2 transition-transform duration-300 group-hover:translate-x-1">→</span>
-          </button>
+            <span className="inline-block ml-2 transition-transform duration-300 group-hover:translate-x-1">
+              →
+            </span>
+          </Link>
           <p className="mt-4 text-sm text-gray-400">
             Over 500+ verified suppliers worldwide
           </p>
