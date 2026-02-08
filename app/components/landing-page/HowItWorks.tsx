@@ -32,7 +32,9 @@ export default function HowItWorks() {
       id="how-it-works"
       className="py-20 max-w-6xl mx-auto px-6 scroll-mt-16"
     >
-      <h2 className="text-2xl font-semibold text-center">How SupplAI Works</h2>
+      <h2 className="text-2xl font-semibold text-center text-gray-900">
+        How SupplAI Works
+      </h2>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-5 md:gap-6 mt-12 max-w-4xl mx-auto">
         {landingImages.steps.map((img, i) => (

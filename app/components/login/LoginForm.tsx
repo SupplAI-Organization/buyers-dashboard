@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabaseClient";
 
 import { useState } from "react";
 import Link from "next/link";
-
+import { Eye, EyeOff } from "lucide-react";
 
 export default function LoginForm() {
   const router = useRouter();
@@ -15,89 +15,88 @@ export default function LoginForm() {
   const [isNotRobot, setIsNotRobot] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
+    e.preventDefault();
 
-  if (!isNotRobot) {
-    alert("Please confirm you are not a robot");
-    return;
-  }
-
-  if (!email || !password) {
-    alert("Email and password are required");
-    return;
-  }
-
-  // SIGN IN
-  if (isLogin) {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      alert(error.message);
+    if (!isNotRobot) {
+      alert("Please confirm you are not a robot");
       return;
     }
 
-    // SUCCESS
-    console.log("Logged in successfully");
-    router.push("/dashboard")
-    
-  }
-
-  // SIGN UP
-  else {
-    if (password !== confirmPassword) {
-      alert("Passwords do not match");
+    if (!email || !password) {
+      alert("Email and password are required");
       return;
     }
 
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
+    // SIGN IN
+    if (isLogin) {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (error) {
-      alert(error.message);
-      return;
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      // SUCCESS
+      console.log("Logged in successfully");
+      router.push("/dashboard");
     }
 
-    console.log("Signup successful", data);
+    // SIGN UP
+    else {
+      if (password !== confirmPassword) {
+        alert("Passwords do not match");
+        return;
+      }
 
-    alert("Account created! Please log in.");
-    setIsLogin(true);
-  }
-};
-const handleGoogleSignIn = async () => {
-  if (isGoogleLoading) return; // Prevent double-clicks
-  
-  setIsGoogleLoading(true);
-  
-  // Small delay to allow UI to update before the redirect
-  await new Promise(resolve => setTimeout(resolve, 50));
-  
-  try {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/dashboard`,
-      },
-    });
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+      });
 
-    if (error) {
-      alert(error.message);
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      console.log("Signup successful", data);
+
+      alert("Account created! Please log in.");
+      setIsLogin(true);
+    }
+  };
+  const handleGoogleSignIn = async () => {
+    if (isGoogleLoading) return; // Prevent double-clicks
+
+    setIsGoogleLoading(true);
+
+    // Small delay to allow UI to update before the redirect
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/dashboard`,
+        },
+      });
+
+      if (error) {
+        alert(error.message);
+        setIsGoogleLoading(false);
+      }
+      // Note: Don't reset loading state on success - page will redirect
+    } catch (err) {
       setIsGoogleLoading(false);
+      alert("Failed to connect to Google. Please try again.");
     }
-    // Note: Don't reset loading state on success - page will redirect
-  } catch (err) {
-    setIsGoogleLoading(false);
-    alert("Failed to connect to Google. Please try again.");
-  }
-};
-
-
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F6F7F9] to-white flex">
@@ -203,11 +202,29 @@ const handleGoogleSignIn = async () => {
             >
               {isGoogleLoading ? (
                 <>
-                  <svg className="animate-spin h-5 w-5 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  <svg
+                    className="animate-spin h-5 w-5 text-gray-500"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
                   </svg>
-                  <span className="text-gray-700 font-medium">Connecting to Google...</span>
+                  <span className="text-gray-700 font-medium">
+                    Connecting to Google...
+                  </span>
                 </>
               ) : (
                 <>
@@ -280,7 +297,7 @@ const handleGoogleSignIn = async () => {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 required
-                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#EA7B7B] focus:border-transparent outline-none transition-all"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#EA7B7B] focus:border-transparent outline-none transition-all text-gray-900"
               />
             </div>
 
@@ -291,15 +308,24 @@ const handleGoogleSignIn = async () => {
               >
                 Password
               </label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                required
-                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#EA7B7B] focus:border-transparent outline-none transition-all"
-              />
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#EA7B7B] focus:border-transparent outline-none transition-all text-gray-900"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
             </div>
 
             {!isLogin && (
@@ -310,15 +336,28 @@ const handleGoogleSignIn = async () => {
                 >
                   Confirm Password
                 </label>
-                <input
-                  id="confirmPassword"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#EA7B7B] focus:border-transparent outline-none transition-all"
-                />
+                <div className="relative">
+                  <input
+                    id="confirmPassword"
+                    type={showConfirmPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#EA7B7B] focus:border-transparent outline-none transition-all text-gray-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff size={20} />
+                    ) : (
+                      <Eye size={20} />
+                    )}
+                  </button>
+                </div>
               </div>
             )}
 
