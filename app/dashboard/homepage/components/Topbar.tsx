@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { Search, ShoppingCart, Bell, User, ChevronDown } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Search, ShoppingCart, Bell, ChevronDown, User, Settings, LogOut } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
 
 interface TopbarProps {
   user: any;
@@ -15,7 +18,11 @@ export default function Topbar({
   onSearch,
   cartItemsCount = 0,
 }: TopbarProps) {
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
+  const [imageError, setImageError] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,6 +31,26 @@ export default function Topbar({
 
   const userName =
     user?.user_metadata?.full_name || user?.email?.split("@")[0] || "User";
+  
+  // Get avatar URL from Supabase auth metadata
+  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  };
 
   return (
     <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
@@ -85,16 +112,74 @@ export default function Topbar({
           <div className="h-8 w-px bg-gray-200" />
 
           {/* User Profile */}
-          <button className="flex items-center gap-3 px-3 py-2 hover:bg-gray-100 rounded-xl transition-colors">
-            <div className="w-9 h-9 bg-gradient-to-br from-[#EA7B7B] to-[#d96a6a] rounded-full flex items-center justify-center text-white font-semibold text-sm">
-              {userName.charAt(0).toUpperCase()}
-            </div>
-            <div className="hidden md:block text-left">
-              <p className="text-sm font-medium text-gray-900">{userName}</p>
-              <p className="text-xs text-gray-500">Buyer Account</p>
-            </div>
-            <ChevronDown className="w-4 h-4 text-gray-400 hidden md:block" />
-          </button>
+          <div className="relative" ref={dropdownRef}>
+            <button 
+              onClick={() => setShowDropdown(!showDropdown)}
+              className="flex items-center gap-3 px-3 py-2 hover:bg-gray-100 rounded-xl transition-colors"
+            >
+              {avatarUrl && !imageError ? (
+                <Image
+                  src={avatarUrl}
+                  alt={userName}
+                  width={36}
+                  height={36}
+                  className="w-9 h-9 rounded-full object-cover"
+                  onError={() => setImageError(true)}
+                />
+              ) : (
+                <div className="w-9 h-9 bg-gradient-to-br from-[#EA7B7B] to-[#d96a6a] rounded-full flex items-center justify-center text-white font-semibold text-sm">
+                  {userName.charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="hidden md:block text-left">
+                <p className="text-sm font-medium text-gray-900">{userName}</p>
+                <p className="text-xs text-gray-500">Buyer Account</p>
+              </div>
+              <ChevronDown className={`w-4 h-4 text-gray-400 hidden md:block transition-transform ${showDropdown ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Dropdown Menu */}
+            {showDropdown && (
+              <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-50">
+                {/* User Info */}
+                <div className="px-4 py-3 border-b border-gray-100">
+                  <p className="text-sm font-medium text-gray-900">{userName}</p>
+                  <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+                </div>
+
+                {/* Menu Items */}
+                <div className="py-1">
+                  <Link
+                    href="/dashboard/userprofile"
+                    onClick={() => setShowDropdown(false)}
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    <User className="w-4 h-4" />
+                    My Account
+                  </Link>
+                  <Link
+                    href="/dashboard/settings"
+                    onClick={() => setShowDropdown(false)}
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Settings
+                  </Link>
+                </div>
+
+                {/* Logout */}
+                <div className="border-t border-gray-100 pt-1">
+                  <button
+                    onClick={handleLogout}
+                    className="flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors w-full"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Log Out
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </header>
