@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import Image from "next/image";
 import { Product, ProductCategory } from "@/lib/product";
 import { formatPrice, parseAttributes } from "@/lib/productService";
 import {
@@ -25,7 +27,9 @@ interface ProductDetailsCardProps {
   product: Product;
 }
 
-export default function ProductDetailsCard({ product }: ProductDetailsCardProps) {
+export default function ProductDetailsCard({
+  product,
+}: ProductDetailsCardProps) {
   const attributes = parseAttributes(product.dynamic_attributes);
 
   // Category icons mapping
@@ -37,7 +41,8 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
     "Natural Fibers": Leaf,
   };
 
-  const CategoryIcon = CategoryIcons[product.category as ProductCategory] || Gem;
+  const CategoryIcon =
+    CategoryIcons[product.category as ProductCategory] || Gem;
 
   // Generate a gradient based on category
   const categoryGradients: Record<string, string> = {
@@ -48,16 +53,46 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
     "Natural Fibers": "from-green-600 to-green-800",
   };
 
-  const gradient = categoryGradients[product.category] || "from-gray-600 to-gray-800";
+  const gradient =
+    categoryGradients[product.category] || "from-gray-600 to-gray-800";
+
+  // Get the first image URL
+  const getImageUrl = (): string | null => {
+    if (!product.image_urls) return null;
+    if (Array.isArray(product.image_urls)) {
+      return product.image_urls[0] || null;
+    }
+    // Handle if it's a JSON string
+    try {
+      const parsed = JSON.parse(product.image_urls);
+      if (Array.isArray(parsed)) return parsed[0] || null;
+      return product.image_urls;
+    } catch {
+      return product.image_urls;
+    }
+  };
+
+  const imageUrl = getImageUrl();
+  const [imageError, setImageError] = useState(false);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
       {/* Left Column - Image/Icon Section */}
       <div className="space-y-6">
         <div
-          className={`relative h-80 lg:h-96 bg-gradient-to-br ${gradient} rounded-2xl flex items-center justify-center shadow-lg`}
+          className={`relative h-80 lg:h-96 rounded-2xl flex items-center justify-center shadow-lg overflow-hidden ${imageUrl && !imageError ? "bg-gray-50 border border-gray-200" : `bg-gradient-to-br ${gradient}`}`}
         >
-          <CategoryIcon className="w-32 h-32 text-white/80" strokeWidth={1} />
+          {imageUrl && !imageError ? (
+            <Image
+              src={imageUrl}
+              alt={product.name}
+              fill
+              className="object-contain p-6"
+              onError={() => setImageError(true)}
+            />
+          ) : (
+            <CategoryIcon className="w-32 h-32 text-white/80" strokeWidth={1} />
+          )}
           <span className="absolute top-4 left-4 px-4 py-2 bg-white/90 rounded-full text-sm font-medium text-gray-700">
             {product.category}
           </span>
@@ -66,7 +101,9 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
         {/* Dynamic Attributes */}
         {Object.keys(attributes).length > 0 && (
           <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Specifications</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Specifications
+            </h3>
             <div className="grid grid-cols-2 gap-4">
               {Object.entries(attributes).map(([key, value]) => (
                 <div key={key} className="bg-gray-50 rounded-xl p-3">
@@ -87,8 +124,12 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
       <div className="space-y-6">
         {/* Header */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">{product.name}</h1>
-          <p className="text-gray-600 mt-3 leading-relaxed">{product.description}</p>
+          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">
+            {product.name}
+          </h1>
+          <p className="text-gray-600 mt-3 leading-relaxed">
+            {product.description}
+          </p>
 
           {/* Price Section */}
           <div className="mt-6 pt-6 border-t border-gray-100">
@@ -141,25 +182,33 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
             {product.origin_country && (
               <div>
                 <p className="text-sm text-gray-500">Country</p>
-                <p className="font-medium text-gray-900">{product.origin_country}</p>
+                <p className="font-medium text-gray-900">
+                  {product.origin_country}
+                </p>
               </div>
             )}
             {product.origin_state && (
               <div>
                 <p className="text-sm text-gray-500">State</p>
-                <p className="font-medium text-gray-900">{product.origin_state}</p>
+                <p className="font-medium text-gray-900">
+                  {product.origin_state}
+                </p>
               </div>
             )}
             {product.origin_district && (
               <div>
                 <p className="text-sm text-gray-500">District</p>
-                <p className="font-medium text-gray-900">{product.origin_district}</p>
+                <p className="font-medium text-gray-900">
+                  {product.origin_district}
+                </p>
               </div>
             )}
             {product.source_name && (
               <div>
                 <p className="text-sm text-gray-500">Source</p>
-                <p className="font-medium text-gray-900">{product.source_name}</p>
+                <p className="font-medium text-gray-900">
+                  {product.source_name}
+                </p>
               </div>
             )}
           </div>
@@ -175,13 +224,17 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
             {product.quality_grade && (
               <div>
                 <p className="text-sm text-gray-500">Quality Grade</p>
-                <p className="font-medium text-gray-900">{product.quality_grade}</p>
+                <p className="font-medium text-gray-900">
+                  {product.quality_grade}
+                </p>
               </div>
             )}
             {product.certification && (
               <div>
                 <p className="text-sm text-gray-500">Certification</p>
-                <p className="font-medium text-gray-900">{product.certification}</p>
+                <p className="font-medium text-gray-900">
+                  {product.certification}
+                </p>
               </div>
             )}
             <div>
@@ -212,7 +265,9 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
                 <Box className="w-5 h-5 text-gray-400 mt-0.5" />
                 <div>
                   <p className="text-sm text-gray-500">Packing Type</p>
-                  <p className="font-medium text-gray-900">{product.packing_type}</p>
+                  <p className="font-medium text-gray-900">
+                    {product.packing_type}
+                  </p>
                 </div>
               </div>
             )}
@@ -221,7 +276,9 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
                 <Warehouse className="w-5 h-5 text-gray-400 mt-0.5" />
                 <div>
                   <p className="text-sm text-gray-500">Storage Type</p>
-                  <p className="font-medium text-gray-900">{product.storage_type}</p>
+                  <p className="font-medium text-gray-900">
+                    {product.storage_type}
+                  </p>
                 </div>
               </div>
             )}
@@ -230,7 +287,9 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
                 <Truck className="w-5 h-5 text-gray-400 mt-0.5" />
                 <div>
                   <p className="text-sm text-gray-500">Transport Mode</p>
-                  <p className="font-medium text-gray-900">{product.transport_mode}</p>
+                  <p className="font-medium text-gray-900">
+                    {product.transport_mode}
+                  </p>
                 </div>
               </div>
             )}
@@ -239,7 +298,9 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
                 <Clock className="w-5 h-5 text-gray-400 mt-0.5" />
                 <div>
                   <p className="text-sm text-gray-500">Lead Time</p>
-                  <p className="font-medium text-gray-900">{product.lead_time_days} days</p>
+                  <p className="font-medium text-gray-900">
+                    {product.lead_time_days} days
+                  </p>
                 </div>
               </div>
             )}
@@ -249,4 +310,3 @@ export default function ProductDetailsCard({ product }: ProductDetailsCardProps)
     </div>
   );
 }
-

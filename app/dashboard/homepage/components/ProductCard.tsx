@@ -1,6 +1,17 @@
 import { Product, ProductCategory } from "@/lib/product";
 import { formatPrice, parseAttributes } from "@/lib/productService";
-import { Heart, ShoppingCart, Eye, Gem, TreePine, Layers, Fuel, Leaf } from "lucide-react";
+import {
+  Heart,
+  ShoppingCart,
+  Eye,
+  Gem,
+  TreePine,
+  Layers,
+  Fuel,
+  Leaf,
+} from "lucide-react";
+import Image from "next/image";
+import { useState } from "react";
 
 interface ProductCardProps {
   product: Product;
@@ -24,7 +35,8 @@ export default function ProductCard({
     "Natural Fibers": Leaf,
   };
 
-  const CategoryIcon = CategoryIcons[product.category as ProductCategory] || Gem;
+  const CategoryIcon =
+    CategoryIcons[product.category as ProductCategory] || Gem;
 
   // Generate a gradient based on category
   const categoryGradients: Record<string, string> = {
@@ -38,13 +50,42 @@ export default function ProductCard({
   const gradient =
     categoryGradients[product.category] || "from-gray-600 to-gray-800";
 
+  // Get the first image URL
+  const getImageUrl = (): string | null => {
+    if (!product.image_urls) return null;
+    if (Array.isArray(product.image_urls)) {
+      return product.image_urls[0] || null;
+    }
+    // Handle if it's a JSON string
+    try {
+      const parsed = JSON.parse(product.image_urls);
+      if (Array.isArray(parsed)) return parsed[0] || null;
+      return product.image_urls;
+    } catch {
+      return product.image_urls;
+    }
+  };
+
+  const imageUrl = getImageUrl();
+  const [imageError, setImageError] = useState(false);
+
   return (
     <div className="bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 overflow-hidden group border border-gray-100">
       {/* Image Section */}
       <div
-        className={`relative h-44 bg-gradient-to-br ${gradient} flex items-center justify-center`}
+        className={`relative h-44 flex items-center justify-center overflow-hidden ${imageUrl && !imageError ? "bg-gray-50" : `bg-gradient-to-br ${gradient}`}`}
       >
-        <CategoryIcon className="w-16 h-16 text-white/80" strokeWidth={1.5} />
+        {imageUrl && !imageError ? (
+          <Image
+            src={imageUrl}
+            alt={product.name}
+            fill
+            className="object-contain p-4"
+            onError={() => setImageError(true)}
+          />
+        ) : (
+          <CategoryIcon className="w-16 h-16 text-white/80" strokeWidth={1.5} />
+        )}
 
         {/* Wishlist Button */}
         <button className="absolute top-3 right-3 p-2 bg-white/90 rounded-full shadow-sm hover:bg-white hover:scale-110 transition-all">

@@ -7,6 +7,7 @@ export interface Product {
   unit_type: string;
   available_quantity: string;
   min_order_quantity: string;
+  image_urls: string | string[] | null;
   reorder_threshold: string | null;
   availability_status: string | null;
   origin_country: string | null;
@@ -59,9 +60,9 @@ export const PRODUCT_CATEGORIES = [
 export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
 
 export const CATEGORY_ICONS: Record<ProductCategory, string> = {
-  "Minerals": "🪨",
-  "Wood": "🪵",
-  "Aggregates": "🏗️",
+  Minerals: "🪨",
+  Wood: "🪵",
+  Aggregates: "🏗️",
   "Fossil Fuels": "⛽",
   "Natural Fibers": "🧶",
 };

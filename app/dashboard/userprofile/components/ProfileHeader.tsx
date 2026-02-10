@@ -1,5 +1,6 @@
 import Image from "next/image";
-import { Mail, Edit2, Camera } from "lucide-react";
+import { Mail, Edit2, Camera, X, Save } from "lucide-react";
+import { useRef } from "react";
 
 interface ProfileHeaderProps {
   userName: string;
@@ -7,6 +8,11 @@ interface ProfileHeaderProps {
   avatarUrl: string | null;
   imageError: boolean;
   onImageError: () => void;
+  isEditing: boolean;
+  onEditClick: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+  onPhotoChange: (file: File) => void;
 }
 
 export default function ProfileHeader({
@@ -15,7 +21,21 @@ export default function ProfileHeader({
   avatarUrl,
   imageError,
   onImageError,
+  isEditing,
+  onEditClick,
+  onSave,
+  onCancel,
+  onPhotoChange,
 }: ProfileHeaderProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      onPhotoChange(file);
+    }
+  };
+
   return (
     <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden mb-6">
       {/* Cover */}
@@ -40,7 +60,17 @@ export default function ProfileHeader({
                 {userName.charAt(0).toUpperCase()}
               </div>
             )}
-            <button className="absolute bottom-2 right-2 p-2 bg-white rounded-full shadow-md hover:shadow-lg transition-shadow">
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              accept="image/*"
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="absolute bottom-2 right-2 p-2 bg-white rounded-full shadow-md hover:shadow-lg transition-shadow"
+            >
               <Camera className="w-4 h-4 text-gray-600" />
             </button>
           </div>
@@ -54,11 +84,33 @@ export default function ProfileHeader({
             </p>
           </div>
 
-          {/* Edit Button */}
-          <button className="flex items-center gap-2 px-5 py-2.5 bg-[#EA7B7B] text-white rounded-xl font-medium hover:bg-[#d96a6a] transition-colors">
-            <Edit2 className="w-4 h-4" />
-            Edit Profile
-          </button>
+          {/* Edit/Save/Cancel Buttons */}
+          {isEditing ? (
+            <div className="flex gap-3">
+              <button
+                onClick={onCancel}
+                className="flex items-center gap-2 px-5 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-colors"
+              >
+                <X className="w-4 h-4" />
+                Cancel
+              </button>
+              <button
+                onClick={onSave}
+                className="flex items-center gap-2 px-5 py-2.5 bg-[#EA7B7B] text-white rounded-xl font-medium hover:bg-[#d96a6a] transition-colors"
+              >
+                <Save className="w-4 h-4" />
+                Save
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onEditClick}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#EA7B7B] text-white rounded-xl font-medium hover:bg-[#d96a6a] transition-colors"
+            >
+              <Edit2 className="w-4 h-4" />
+              Edit Profile
+            </button>
+          )}
         </div>
       </div>
     </div>
