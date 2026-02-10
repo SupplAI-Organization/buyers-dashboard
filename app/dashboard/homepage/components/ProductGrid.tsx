@@ -25,6 +25,7 @@ export default function ProductGrid({
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sortOption, setSortOption] = useState<string>("Latest");
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -101,6 +102,24 @@ export default function ProductGrid({
     console.log("Add to cart:", product.id);
   };
 
+  const sortProducts = (products: Product[], option: string) => {
+    switch (option) {
+      case "Price: Low to High":
+        return [...products].sort((a, b) => a.price_per_unit - b.price_per_unit);
+      case "Price: High to Low":
+        return [...products].sort((a, b) => b.price_per_unit - a.price_per_unit);
+      case "Name: A to Z":
+        return [...products].sort((a, b) => a.name.localeCompare(b.name));
+      case "Latest":
+      default:
+        return [...products].sort((a, b) => b.id - a.id); // Assuming higher id is newer
+    }
+  };
+
+  useEffect(() => {
+    setProducts((prev) => sortProducts(prev, sortOption));
+  }, [sortOption]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
@@ -159,11 +178,15 @@ export default function ProductGrid({
         </div>
 
         {/* Sort Dropdown */}
-        <select className="px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#EA7B7B]/20">
-          <option>Sort by: Latest</option>
-          <option>Price: Low to High</option>
-          <option>Price: High to Low</option>
-          <option>Name: A to Z</option>
+        <select
+          className="px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#EA7B7B]/20"
+          value={sortOption}
+          onChange={(e) => setSortOption(e.target.value)}
+        >
+          <option value="Latest">Sort by: Latest</option>
+          <option value="Price: Low to High">Price: Low to High</option>
+          <option value="Price: High to Low">Price: High to Low</option>
+          <option value="Name: A to Z">Name: A to Z</option>
         </select>
       </div>
 

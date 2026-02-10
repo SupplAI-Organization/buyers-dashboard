@@ -1,7 +1,6 @@
 import { Product, ProductCategory } from "@/lib/product";
 import { formatPrice, parseAttributes } from "@/lib/productService";
 import {
-  Heart,
   ShoppingCart,
   Eye,
   Gem,
@@ -86,11 +85,6 @@ export default function ProductCard({
         ) : (
           <CategoryIcon className="w-16 h-16 text-white/80" strokeWidth={1.5} />
         )}
-
-        {/* Wishlist Button */}
-        <button className="absolute top-3 right-3 p-2 bg-white/90 rounded-full shadow-sm hover:bg-white hover:scale-110 transition-all">
-          <Heart className="w-4 h-4 text-gray-600 hover:text-red-500" />
-        </button>
 
         {/* Category Badge */}
         <span className="absolute top-3 left-3 px-3 py-1 bg-white/90 rounded-full text-xs font-medium text-gray-700">
