@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import ProductCard from "./ProductCard";
 import { Product } from "@/lib/product";
 import {
@@ -8,6 +9,7 @@ import {
   fetchProductsByCategory,
   searchProducts,
 } from "@/lib/productService";
+import { supabase } from "@/lib/supabaseClient";
 import { Loader2, Package } from "lucide-react";
 
 interface ProductGridProps {
@@ -19,6 +21,7 @@ export default function ProductGrid({
   selectedCategory,
   searchQuery,
 }: ProductGridProps) {
+  const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +52,54 @@ export default function ProductGrid({
     };
 
     loadProducts();
+
+    // Real-time subscription for products
+    const channel = supabase
+      .channel("products-realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "products",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            const newProduct = payload.new as Product;
+            if (newProduct.is_listed) {
+              // Check if it matches current filter
+              if (!selectedCategory || newProduct.category === selectedCategory) {
+                setProducts((prev) => [newProduct, ...prev]);
+              }
+            }
+          } else if (payload.eventType === "UPDATE") {
+            const updatedProduct = payload.new as Product;
+            setProducts((prev) =>
+              prev.map((p) =>
+                p.id === updatedProduct.id ? updatedProduct : p
+              ).filter((p) => p.is_listed)
+            );
+          } else if (payload.eventType === "DELETE") {
+            const deletedId = payload.old.id;
+            setProducts((prev) => prev.filter((p) => p.id !== deletedId));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [selectedCategory, searchQuery]);
+
+  const handleViewDetails = (product: Product) => {
+    router.push(`/dashboard/productdetails/${product.id}`);
+  };
+
+  const handleAddToCart = (product: Product) => {
+    // TODO: Implement cart functionality
+    console.log("Add to cart:", product.id);
+  };
 
   if (loading) {
     return (
@@ -123,8 +173,8 @@ export default function ProductGrid({
           <ProductCard
             key={product.id}
             product={product}
-            onViewDetails={(p) => console.log("View details:", p.id)}
-            onAddToCart={(p) => console.log("Add to cart:", p.id)}
+            onViewDetails={handleViewDetails}
+            onAddToCart={handleAddToCart}
           />
         ))}
       </div>

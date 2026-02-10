@@ -36,7 +36,7 @@ export default function Topbar({
           <img
             src="/landing/SupplAI_logo.jpg"
             alt="SupplAI Logo"
-            className="absolute -left-7 h-28 w-28 object-contain"
+            className="absolute -left-5 h-28 w-28 object-contain"
           />
           <span className="ml-14 text-3xl font-bold text-gray-900">
             Suppl<span className="text-[#EA7B7B]">AI</span>

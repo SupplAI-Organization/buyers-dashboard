@@ -1,6 +1,6 @@
-import { Product, CATEGORY_ICONS, ProductCategory } from "@/lib/product";
+import { Product, ProductCategory } from "@/lib/product";
 import { formatPrice, parseAttributes } from "@/lib/productService";
-import { Heart, ShoppingCart, Eye, CheckCircle, Clock } from "lucide-react";
+import { Heart, ShoppingCart, Eye, Gem, TreePine, Layers, Fuel, Leaf } from "lucide-react";
 
 interface ProductCardProps {
   product: Product;
@@ -14,8 +14,17 @@ export default function ProductCard({
   onAddToCart,
 }: ProductCardProps) {
   const attributes = parseAttributes(product.dynamic_attributes);
-  const categoryIcon =
-    CATEGORY_ICONS[product.category as ProductCategory] || "📦";
+
+  // Category icons mapping
+  const CategoryIcons: Record<ProductCategory, typeof Gem> = {
+    Minerals: Gem,
+    Wood: TreePine,
+    Aggregates: Layers,
+    "Fossil Fuels": Fuel,
+    "Natural Fibers": Leaf,
+  };
+
+  const CategoryIcon = CategoryIcons[product.category as ProductCategory] || Gem;
 
   // Generate a gradient based on category
   const categoryGradients: Record<string, string> = {
@@ -35,7 +44,7 @@ export default function ProductCard({
       <div
         className={`relative h-44 bg-gradient-to-br ${gradient} flex items-center justify-center`}
       >
-        <span className="text-6xl opacity-80">{categoryIcon}</span>
+        <CategoryIcon className="w-16 h-16 text-white/80" strokeWidth={1.5} />
 
         {/* Wishlist Button */}
         <button className="absolute top-3 right-3 p-2 bg-white/90 rounded-full shadow-sm hover:bg-white hover:scale-110 transition-all">
@@ -46,19 +55,6 @@ export default function ProductCard({
         <span className="absolute top-3 left-3 px-3 py-1 bg-white/90 rounded-full text-xs font-medium text-gray-700">
           {product.category}
         </span>
-
-        {/* Approval Status */}
-        {product.is_approved ? (
-          <span className="absolute bottom-3 left-3 flex items-center gap-1 px-2 py-1 bg-green-500 text-white rounded-full text-xs font-medium">
-            <CheckCircle className="w-3 h-3" />
-            Verified
-          </span>
-        ) : (
-          <span className="absolute bottom-3 left-3 flex items-center gap-1 px-2 py-1 bg-amber-500 text-white rounded-full text-xs font-medium">
-            <Clock className="w-3 h-3" />
-            Pending
-          </span>
-        )}
       </div>
 
       {/* Content Section */}

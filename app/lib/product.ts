@@ -1,7 +1,5 @@
 export interface Product {
   id: string;
-  supplier_id: string | null;
-  parameter_form_id: string | null;
   name: string;
   category: string;
   description: string;
@@ -9,10 +7,22 @@ export interface Product {
   unit_type: string;
   available_quantity: string;
   min_order_quantity: string;
+  reorder_threshold: string | null;
+  availability_status: string | null;
+  origin_country: string | null;
+  origin_state: string | null;
+  origin_district: string | null;
+  source_name: string | null;
+  packing_type: string | null;
+  storage_type: string | null;
+  transport_mode: string | null;
+  lead_time_days: number | null;
+  quality_grade: string | null;
+  certification: string | null;
+  test_report_available: boolean | null;
   dynamic_attributes: string;
   is_listed: boolean;
   is_approved: boolean;
-  listed_at: string;
   created_at: string;
   updated_at: string;
 }
