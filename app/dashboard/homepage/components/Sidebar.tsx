@@ -18,7 +18,6 @@ import { useRouter } from "next/navigation";
 
 const menuItems = [
   { icon: Home, label: "Home", href: "/dashboard/homepage" },
-  { icon: Package, label: "Products", href: "/dashboard/products" },
   { icon: ShoppingCart, label: "Orders", href: "/dashboard/orders" },
   { icon: Heart, label: "Wishlist", href: "/dashboard/wishlist" },
   { icon: ClipboardList, label: "Quotes", href: "/dashboard/quotes" },

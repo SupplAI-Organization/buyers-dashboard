@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { Product, ProductCategory } from "@/lib/product";
 import { formatPrice, parseAttributes } from "@/lib/productService";
 import {
@@ -21,6 +22,7 @@ import {
   Share2,
   Box,
   Warehouse,
+  Zap,
 } from "lucide-react";
 
 interface ProductDetailsCardProps {
@@ -30,6 +32,7 @@ interface ProductDetailsCardProps {
 export default function ProductDetailsCard({
   product,
 }: ProductDetailsCardProps) {
+  const router = useRouter();
   const attributes = parseAttributes(product.dynamic_attributes);
 
   // Category icons mapping
@@ -162,6 +165,13 @@ export default function ProductDetailsCard({
             <button className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-[#EA7B7B] text-white rounded-xl font-medium hover:bg-[#d96a6a] transition-colors">
               <ShoppingCart className="w-5 h-5" />
               Add to Cart
+            </button>
+            <button
+              onClick={() => router.push(`/dashboard/homepage/components/buy/${product.id}`)}
+              className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gray-900 text-white rounded-xl font-medium hover:bg-gray-800 transition-colors"
+            >
+              <Zap className="w-5 h-5" />
+              Buy Now
             </button>
             <button className="p-3 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors">
               <Heart className="w-5 h-5 text-gray-600" />
