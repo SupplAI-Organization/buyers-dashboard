@@ -9,12 +9,14 @@ import Topbar from "./components/Topbar";
 import CategoryBar from "./components/CategoryBar";
 import HeroSection from "./components/HeroSection";
 import ProductGrid from "./components/ProductGrid";
+import { getOrCreateCart } from "@/lib/cartService";
 
 export default function DashboardHomePage() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [cartCount, setCartCount] = useState(0);
 
   useEffect(() => {
     const checkUser = async () => {
@@ -23,10 +25,47 @@ export default function DashboardHomePage() {
         router.replace("/login");
       } else {
         setUser(data.user);
+        initCart(data.user.id);
       }
     };
     checkUser();
+
+    return () => {
+      supabase.channel("cart-count-channel").unsubscribe();
+    };
   }, [router]);
+
+  const initCart = async (userId: string) => {
+    const cart = await getOrCreateCart(userId);
+    if (cart) {
+      updateCartCount(cart.id);
+
+      // Subscribe to changes in this cart
+      supabase
+        .channel("cart-count-channel")
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "cart_items",
+            filter: `cart_id=eq.${cart.id}`,
+          },
+          () => {
+            updateCartCount(cart.id);
+          },
+        )
+        .subscribe();
+    }
+  };
+
+  const updateCartCount = async (cartId: string) => {
+    const { count } = await supabase
+      .from("cart_items")
+      .select("*", { count: "exact", head: true })
+      .eq("cart_id", cartId);
+    setCartCount(count || 0);
+  };
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
@@ -43,7 +82,7 @@ export default function DashboardHomePage() {
   return (
     <div className="min-h-screen bg-[#f5f6fa]">
       {/* Topbar - Full Width */}
-      <Topbar user={user} onSearch={handleSearch} cartItemsCount={2} />
+      <Topbar user={user} onSearch={handleSearch} cartItemsCount={cartCount} />
 
       {/* Sidebar - Below Topbar */}
       <Sidebar />
@@ -65,6 +104,7 @@ export default function DashboardHomePage() {
           <ProductGrid
             selectedCategory={selectedCategory}
             searchQuery={searchQuery}
+            user={user}
           />
         </main>
       </div>
