@@ -1,5 +1,6 @@
 export interface Product {
   id: string;
+  supplier_id: string;
   name: string;
   category: string;
   description: string;

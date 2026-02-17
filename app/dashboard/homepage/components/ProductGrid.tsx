@@ -10,16 +10,19 @@ import {
   searchProducts,
 } from "@/lib/productService";
 import { supabase } from "@/lib/supabaseClient";
+import { addToCart } from "@/lib/cartService";
 import { Loader2, Package } from "lucide-react";
 
 interface ProductGridProps {
   selectedCategory: string | null;
   searchQuery: string;
+  user: any;
 }
 
 export default function ProductGrid({
   selectedCategory,
   searchQuery,
+  user,
 }: ProductGridProps) {
   const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
@@ -69,22 +72,25 @@ export default function ProductGrid({
             const newProduct = payload.new as Product;
             if (newProduct.is_listed) {
               // Check if it matches current filter
-              if (!selectedCategory || newProduct.category === selectedCategory) {
+              if (
+                !selectedCategory ||
+                newProduct.category === selectedCategory
+              ) {
                 setProducts((prev) => [newProduct, ...prev]);
               }
             }
           } else if (payload.eventType === "UPDATE") {
             const updatedProduct = payload.new as Product;
             setProducts((prev) =>
-              prev.map((p) =>
-                p.id === updatedProduct.id ? updatedProduct : p
-              ).filter((p) => p.is_listed)
+              prev
+                .map((p) => (p.id === updatedProduct.id ? updatedProduct : p))
+                .filter((p) => p.is_listed),
             );
           } else if (payload.eventType === "DELETE") {
             const deletedId = payload.old.id;
             setProducts((prev) => prev.filter((p) => p.id !== deletedId));
           }
-        }
+        },
       )
       .subscribe();
 
@@ -97,9 +103,9 @@ export default function ProductGrid({
     router.push(`/dashboard/productdetails/${product.id}`);
   };
 
-  const handleAddToCart = (product: Product) => {
-    // TODO: Implement cart functionality
-    console.log("Add to cart:", product.id);
+  const handleAddToCart = async (product: Product) => {
+    if (!user) return;
+    await addToCart(user.id, product.id);
   };
 
   const sortProducts = (products: Product[], option: string) => {

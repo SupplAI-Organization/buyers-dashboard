@@ -1,10 +1,8 @@
-"use client";
-
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Product } from "@/lib/product";
 import { formatPrice } from "@/lib/productService";
-import { createOrderItem } from "@/lib/orderService";
+import { createOrderItem, createOrderWithItems } from "@/lib/orderService";
 import {
     ArrowLeft,
     Loader2,
@@ -20,28 +18,41 @@ import {
 } from "lucide-react";
 
 interface BuyNowContentProps {
-    product: Product;
+    product?: Product;
+    items?: any[];
     user: any;
 }
 
-export default function BuyNowContent({ product, user }: BuyNowContentProps) {
+export default function BuyNowContent({ product, items, user }: BuyNowContentProps) {
     const router = useRouter();
     const [submitting, setSubmitting] = useState(false);
     const [success, setSuccess] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     // Form state
-    const [quantity, setQuantity] = useState(parseInt(product.min_order_quantity) || 1);
+    const [quantity, setQuantity] = useState(product ? (parseInt(product.min_order_quantity) || 1) : 0);
     const [shippingAddress, setShippingAddress] = useState("");
     const [paymentMethod, setPaymentMethod] = useState("cash_on_delivery");
     const [specialRequirements, setSpecialRequirements] = useState("");
 
-    const unitPrice = parseFloat(product.price_per_unit);
-    const totalPrice = unitPrice * quantity;
+    const isCartCheckout = !!items && items.length > 0;
+
+    const subtotal = useMemo(() => {
+        if (isCartCheckout) {
+            return items.reduce((sum, item) => sum + (parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * item.quantity), 0);
+        }
+        if (product) {
+            return parseFloat(product.price_per_unit) * quantity;
+        }
+        return 0;
+    }, [isCartCheckout, items, product, quantity]);
+
+    const tax = subtotal * 0.18;
+    const totalPrice = subtotal + tax;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!product || !user) return;
+        if ((!product && !isCartCheckout) || !user) return;
 
         if (!shippingAddress.trim()) {
             setError("Please enter a shipping address");
@@ -53,29 +64,65 @@ export default function BuyNowContent({ product, user }: BuyNowContentProps) {
 
         const now = new Date().toISOString();
 
-        const { error: submitError } = await createOrderItem({
-            product_id: product.id,
-            quantity,
-            unit_price: unitPrice,
-            total_price: totalPrice,
-            product_snapshot: {
-                name: product.name,
-                category: product.category,
-                description: product.description,
-                image_urls: product.image_urls,
-                origin_country: product.origin_country,
-                unit_type: product.unit_type,
-            },
-            special_requirments: specialRequirements,
-            shipping_address: shippingAddress,
-            payment_method: paymentMethod,
-            date_time: now,
-        });
+        if (isCartCheckout) {
+            const orderItems = items.map(item => ({
+                product_id: item.product_id || item.id,
+                supplier_id: item.supplier_id || item.product?.supplier_id,
+                quantity: item.quantity,
+                unit_price: parseFloat(item.price_per_unit || item.product?.price_per_unit || "0"),
+                total_price: parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * item.quantity,
+                product_snapshot: {
+                    name: item.name || item.product?.name,
+                    category: item.category || item.product?.category,
+                    description: item.description || item.product?.description,
+                    image_urls: item.image_urls || item.product?.image_urls,
+                    origin_country: item.origin_country || item.product?.origin_country,
+                    unit_type: item.unit_type || item.product?.unit_type,
+                },
+                special_requirments: specialRequirements,
+                shipping_address: shippingAddress,
+                payment_method: paymentMethod,
+                date_time: now,
+            }));
 
-        if (submitError) {
-            setError(submitError);
-            setSubmitting(false);
-            return;
+            const { error: submitError } = await createOrderWithItems({
+                shipping_address: shippingAddress,
+                payment_method: paymentMethod,
+                date_time: now,
+                special_requirments: specialRequirements,
+            }, orderItems);
+
+            if (submitError) {
+                setError(submitError);
+                setSubmitting(false);
+                return;
+            }
+        } else if (product) {
+            const unitPrice = parseFloat(product.price_per_unit);
+            const { error: submitError } = await createOrderItem({
+                product_id: product.id,
+                quantity,
+                unit_price: unitPrice,
+                total_price: unitPrice * quantity,
+                product_snapshot: {
+                    name: product.name,
+                    category: product.category,
+                    description: product.description,
+                    image_urls: product.image_urls,
+                    origin_country: product.origin_country,
+                    unit_type: product.unit_type,
+                },
+                special_requirments: specialRequirements,
+                shipping_address: shippingAddress,
+                payment_method: paymentMethod,
+                date_time: now,
+            }, product.supplier_id);
+
+            if (submitError) {
+                setError(submitError);
+                setSubmitting(false);
+                return;
+            }
         }
 
         setSuccess(true);
@@ -98,11 +145,7 @@ export default function BuyNowContent({ product, user }: BuyNowContentProps) {
                         Order Confirmed!
                     </h2>
                     <p className="text-gray-500 mb-6">
-                        Your order for{" "}
-                        <span className="font-semibold text-gray-700">
-                            {product.name}
-                        </span>{" "}
-                        has been placed successfully.
+                        Your order has been placed successfully.
                     </p>
                     <p className="text-sm text-gray-400">
                         Redirecting to your orders...
@@ -122,7 +165,7 @@ export default function BuyNowContent({ product, user }: BuyNowContentProps) {
                         className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
                     >
                         <ArrowLeft className="w-5 h-5" />
-                        <span className="font-medium">Back to Product</span>
+                        <span className="font-medium">Back</span>
                     </button>
                 </div>
             </div>
@@ -131,76 +174,104 @@ export default function BuyNowContent({ product, user }: BuyNowContentProps) {
             <div className="max-w-5xl mx-auto px-6 py-8">
                 <h1 className="text-2xl font-bold text-gray-900 mb-8 flex items-center gap-3">
                     <ShoppingBag className="w-7 h-7 text-[#EA7B7B]" />
-                    Place Your Order
+                    {isCartCheckout ? "Checkout" : "Place Your Order"}
                 </h1>
 
                 <form onSubmit={handleSubmit}>
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                         {/* Left - Form */}
                         <div className="lg:col-span-2 space-y-6">
-                            {/* Product Summary */}
+                            {/* Product(s) Summary */}
                             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
                                 <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                                     <Package className="w-5 h-5 text-[#EA7B7B]" />
-                                    Product
+                                    {isCartCheckout ? "Items in your order" : "Product"}
                                 </h3>
-                                <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl">
-                                    <div className="w-16 h-16 bg-gradient-to-br from-[#EA7B7B] to-[#d96a6a] rounded-xl flex items-center justify-center text-white text-2xl flex-shrink-0">
-                                        {product.name.charAt(0)}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="font-semibold text-gray-900 truncate">
-                                            {product.name}
-                                        </p>
-                                        <p className="text-sm text-gray-500">{product.category}</p>
-                                    </div>
-                                    <div className="text-right">
-                                        <p className="font-bold text-[#EA7B7B]">
-                                            {formatPrice(product.price_per_unit, product.unit_type)}
-                                        </p>
-                                    </div>
-                                </div>
 
-                                {/* Quantity */}
-                                <div className="mt-5">
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                                        Quantity ({product.unit_type})
-                                    </label>
-                                    <div className="flex items-center gap-3">
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                setQuantity(Math.max(parseInt(product.min_order_quantity) || 1, quantity - 1))
-                                            }
-                                            className="w-10 h-10 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-colors"
-                                        >
-                                            <Minus className="w-4 h-4 text-gray-600" />
-                                        </button>
-                                        <input
-                                            type="number"
-                                            value={quantity}
-                                            onChange={(e) => {
-                                                const val = parseInt(e.target.value) || 0;
-                                                setQuantity(Math.max(parseInt(product.min_order_quantity) || 1, val));
-                                            }}
-                                            min={parseInt(product.min_order_quantity) || 1}
-                                            max={parseInt(product.available_quantity)}
-                                            className="w-24 h-10 text-center border border-gray-200 rounded-xl text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-[#EA7B7B]/20 focus:border-[#EA7B7B]"
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                setQuantity(Math.min(parseInt(product.available_quantity), quantity + 1))
-                                            }
-                                            className="w-10 h-10 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-colors"
-                                        >
-                                            <Plus className="w-4 h-4 text-gray-600" />
-                                        </button>
-                                        <span className="text-sm text-gray-400 ml-2">
-                                            Min: {product.min_order_quantity} • Available:{" "}
-                                            {product.available_quantity} {product.unit_type}
-                                        </span>
-                                    </div>
+                                <div className="space-y-4">
+                                    {isCartCheckout ? (
+                                        items.map((item, idx) => (
+                                            <div key={idx} className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl">
+                                                <div className="w-12 h-12 bg-gradient-to-br from-[#EA7B7B] to-[#d96a6a] rounded-xl flex items-center justify-center text-white text-xl flex-shrink-0">
+                                                    {(item.name || item.product?.name)?.charAt(0)}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="font-semibold text-gray-900 truncate">
+                                                        {item.name || item.product?.name}
+                                                    </p>
+                                                    <p className="text-xs text-gray-500">
+                                                        Qty: {item.quantity} {item.unit_type || item.product?.unit_type}
+                                                    </p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="font-bold text-[#EA7B7B]">
+                                                        ₹{(parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * item.quantity).toLocaleString("en-IN")}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : product && (
+                                        <>
+                                            <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl">
+                                                <div className="w-16 h-16 bg-gradient-to-br from-[#EA7B7B] to-[#d96a6a] rounded-xl flex items-center justify-center text-white text-2xl flex-shrink-0">
+                                                    {product.name.charAt(0)}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="font-semibold text-gray-900 truncate">
+                                                        {product.name}
+                                                    </p>
+                                                    <p className="text-sm text-gray-500">{product.category}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="font-bold text-[#EA7B7B]">
+                                                        {formatPrice(product.price_per_unit, product.unit_type)}
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {/* Quantity for single product */}
+                                            <div className="mt-5">
+                                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                    Quantity ({product.unit_type})
+                                                </label>
+                                                <div className="flex items-center gap-3">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setQuantity(Math.max(parseInt(product.min_order_quantity) || 1, quantity - 1))
+                                                        }
+                                                        className="w-10 h-10 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-colors"
+                                                    >
+                                                        <Minus className="w-4 h-4 text-gray-600" />
+                                                    </button>
+                                                    <input
+                                                        type="number"
+                                                        value={quantity}
+                                                        onChange={(e) => {
+                                                            const val = parseInt(e.target.value) || 0;
+                                                            setQuantity(Math.max(parseInt(product.min_order_quantity) || 1, val));
+                                                        }}
+                                                        min={parseInt(product.min_order_quantity) || 1}
+                                                        max={parseInt(product.available_quantity)}
+                                                        className="w-24 h-10 text-center border border-gray-200 rounded-xl text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-[#EA7B7B]/20 focus:border-[#EA7B7B]"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setQuantity(Math.min(parseInt(product.available_quantity), quantity + 1))
+                                                        }
+                                                        className="w-10 h-10 rounded-xl border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-colors"
+                                                    >
+                                                        <Plus className="w-4 h-4 text-gray-600" />
+                                                    </button>
+                                                    <span className="text-sm text-gray-400 ml-2">
+                                                        Min: {product.min_order_quantity} • Available:{" "}
+                                                        {product.available_quantity} {product.unit_type}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
 
@@ -307,21 +378,21 @@ export default function BuyNowContent({ product, user }: BuyNowContentProps) {
 
                                 <div className="space-y-4">
                                     <div className="flex justify-between text-sm">
-                                        <span className="text-gray-500">Product</span>
+                                        <span className="text-gray-500">Items</span>
                                         <span className="font-medium text-gray-900 text-right max-w-[60%] truncate">
-                                            {product.name}
+                                            {isCartCheckout ? `${items.length} Products` : product?.name}
                                         </span>
                                     </div>
                                     <div className="flex justify-between text-sm">
-                                        <span className="text-gray-500">Unit Price</span>
+                                        <span className="text-gray-500">Subtotal</span>
                                         <span className="font-medium text-gray-900">
-                                            ₹{unitPrice.toLocaleString("en-IN")}
+                                            ₹{subtotal.toLocaleString("en-IN")}
                                         </span>
                                     </div>
                                     <div className="flex justify-between text-sm">
-                                        <span className="text-gray-500">Quantity</span>
+                                        <span className="text-gray-500">Tax</span>
                                         <span className="font-medium text-gray-900">
-                                            {quantity} {product.unit_type}
+                                            ₹{tax.toLocaleString("en-IN")}
                                         </span>
                                     </div>
                                     <div className="flex justify-between text-sm">
