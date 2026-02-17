@@ -11,7 +11,7 @@ import {
 } from "@/lib/productService";
 import { supabase } from "@/lib/supabaseClient";
 import { addToCart } from "@/lib/cartService";
-import { Loader2, Package } from "lucide-react";
+import { Loader2, Package, CheckCircle2, AlertCircle } from "lucide-react";
 
 interface ProductGridProps {
   selectedCategory: string | null;
@@ -29,6 +29,15 @@ export default function ProductGrid({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortOption, setSortOption] = useState<string>("Latest");
+
+  const [notification, setNotification] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -105,20 +114,25 @@ export default function ProductGrid({
 
   const handleAddToCart = async (product: Product) => {
     if (!user) return;
-    await addToCart(user.id, product.id);
+    const success = await addToCart(user.id, product.id);
+    if (success) {
+      setNotification({ message: `${product.name} added to cart!`, type: "success" });
+    } else {
+      setNotification({ message: "Failed to add to cart", type: "error" });
+    }
   };
 
   const sortProducts = (products: Product[], option: string) => {
     switch (option) {
       case "Price: Low to High":
-        return [...products].sort((a, b) => a.price_per_unit - b.price_per_unit);
+        return [...products].sort((a, b) => parseFloat(a.price_per_unit) - parseFloat(b.price_per_unit));
       case "Price: High to Low":
-        return [...products].sort((a, b) => b.price_per_unit - a.price_per_unit);
+        return [...products].sort((a, b) => parseFloat(b.price_per_unit) - parseFloat(a.price_per_unit));
       case "Name: A to Z":
         return [...products].sort((a, b) => a.name.localeCompare(b.name));
       case "Latest":
       default:
-        return [...products].sort((a, b) => b.id - a.id); // Assuming higher id is newer
+        return [...products].sort((a, b) => b.id.localeCompare(a.id));
     }
   };
 
@@ -167,6 +181,27 @@ export default function ProductGrid({
 
   return (
     <div>
+      {/* Notification Toast */}
+      {notification && (
+        <div className="fixed top-24 right-6 z-50 animate-in slide-in-from-right-10 fade-in duration-300">
+          <div className={`px-6 py-3 rounded-2xl shadow-lg border flex items-center gap-3 ${notification.type === "success"
+            ? "bg-green-50 border-green-100 text-green-700"
+            : "bg-red-50 border-red-100 text-red-700"
+            }`}>
+            {notification.type === "success" ? (
+              <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+            ) : (
+              <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center text-white">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+            )}
+            <p className="font-medium">{notification.message}</p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
