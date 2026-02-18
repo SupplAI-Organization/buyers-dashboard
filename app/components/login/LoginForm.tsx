@@ -117,7 +117,7 @@ export default function LoginForm() {
       <div
         className="hidden lg:flex lg:w-1/2 p-12 flex-col justify-between relative"
         style={{
-          backgroundImage: "url('/login/Loginpage.jpg')",
+          backgroundImage: "url('/login/loginpage.jpg')",
           backgroundSize: "cover",
           backgroundPosition: "center",
         }}
@@ -184,22 +184,20 @@ export default function LoginForm() {
             <button
               type="button"
               onClick={() => setIsLogin(true)}
-              className={`flex-1 py-2.5 text-sm font-medium rounded-full transition-all ${
-                isLogin
-                  ? "bg-white text-gray-900 shadow-sm"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
+              className={`flex-1 py-2.5 text-sm font-medium rounded-full transition-all ${isLogin
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-600 hover:text-gray-900"
+                }`}
             >
               Sign In
             </button>
             <button
               type="button"
               onClick={() => setIsLogin(false)}
-              className={`flex-1 py-2.5 text-sm font-medium rounded-full transition-all ${
-                !isLogin
-                  ? "bg-white text-gray-900 shadow-sm"
-                  : "text-gray-600 hover:text-gray-900"
-              }`}
+              className={`flex-1 py-2.5 text-sm font-medium rounded-full transition-all ${!isLogin
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-600 hover:text-gray-900"
+                }`}
             >
               Sign Up
             </button>
