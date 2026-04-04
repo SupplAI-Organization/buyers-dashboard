@@ -10,6 +10,7 @@ import CategoryBar from "./components/CategoryBar";
 import HeroSection from "./components/HeroSection";
 import ProductGrid from "./components/ProductGrid";
 import { getOrCreateCart } from "@/lib/cartService";
+import { ensureBuyerProfile } from "@/lib/buyerService";
 
 export default function DashboardHomePage() {
   const router = useRouter();
@@ -25,6 +26,7 @@ export default function DashboardHomePage() {
         router.replace("/login");
       } else {
         setUser(data.user);
+        await ensureBuyerProfile(data.user.id, data.user.email!);
         initCart(data.user.id);
       }
     };

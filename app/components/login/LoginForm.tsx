@@ -58,6 +58,11 @@ export default function LoginForm() {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          data: {
+            role: 'buyer',
+          },
+        },
       });
 
       if (error) {
