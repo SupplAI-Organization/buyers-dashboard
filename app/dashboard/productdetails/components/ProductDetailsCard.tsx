@@ -47,9 +47,17 @@ export default function ProductDetailsCard({
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   // Chat state
-  type ChatMessage = { role: "user" | "assistant"; content: string };
+  type DbMessage = {
+    id: number;
+    created_at: string;
+    sender_id: string | null;
+    receiver_id: string | null;
+    sender_role: "buyer" | "ai";
+    content: string;
+    product_id: string;
+  };
   const [chatOpen, setChatOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatMessages, setChatMessages] = useState<DbMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatStreaming, setChatStreaming] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
@@ -62,63 +70,155 @@ export default function ProductDetailsCard({
     "What packing types are available?",
   ];
 
+  // Load existing messages + subscribe to real-time inserts
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const userId = user.id;
+
+    // Fetch messages where the user is either the sender or the receiver
+    supabase
+      .from("messages")
+      .select("id, created_at, sender_role, content, product_id, sender_id, receiver_id")
+      .eq("product_id", product.id)
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+      .order("created_at", { ascending: true })
+      .then(({ data }) => {
+        if (data) setChatMessages(data as DbMessage[]);
+      });
+
+    const channel = supabase
+      .channel(`product-chat-${product.id}-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `product_id=eq.${product.id}`,
+        },
+        (payload) => {
+          const incoming = payload.new as DbMessage;
+          // Only show messages where this user is the sender or receiver
+          const isRelevant =
+            incoming.sender_id === userId || incoming.receiver_id === userId;
+          if (!isRelevant) return;
+
+          setChatMessages((prev) => {
+            // Skip if already present by real DB id
+            if (prev.some((m) => m.id === incoming.id)) return prev;
+            // Replace the temp optimistic message with the persisted one (matched by content + role)
+            const tempIndex = prev.findIndex(
+              (m) => m.id > 1_700_000_000_000 && m.sender_role === incoming.sender_role && m.content === incoming.content
+            );
+            if (tempIndex !== -1) {
+              const updated = [...prev];
+              updated[tempIndex] = incoming;
+              return updated;
+            }
+            return [...prev, incoming];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [product.id, user?.id]);
+
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
+  }, [chatMessages, chatStreaming]);
 
   const sendChatMessage = async (text: string) => {
     if (!text.trim() || chatStreaming) return;
-    const userMsg: ChatMessage = { role: "user", content: text.trim() };
-    const updatedHistory = [...chatMessages, userMsg];
-    setChatMessages(updatedHistory);
     setChatInput("");
     setChatStreaming(true);
-    // Placeholder for the streaming assistant reply
-    setChatMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const session = sessionData.session;
+
+    if (!session?.access_token || !session.user) {
+      setChatStreaming(false);
+      router.push("/login");
+      return;
+    }
+
+    // Optimistically add buyer message to UI
+    const tempBuyerMsg: DbMessage = {
+      id: Date.now(),
+      created_at: new Date().toISOString(),
+      sender_id: session.user.id,
+      receiver_id: null,
+      sender_role: "buyer",
+      content: text.trim(),
+      product_id: product.id,
+    };
+    setChatMessages((prev) => [...prev, tempBuyerMsg]);
+
+    // Build history in AI SDK format for the API
+    const history = [
+      ...chatMessages.map((m) => ({
+        role: m.sender_role === "buyer" ? ("user" as const) : ("assistant" as const),
+        content: m.content,
+      })),
+      { role: "user" as const, content: text.trim() },
+    ];
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: product.id, messages: updatedHistory }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ productId: product.id, messages: history }),
       });
 
-      if (!res.ok || !res.body) {
-        setChatMessages((prev) => {
-          const updated = [...prev];
-          updated[updated.length - 1] = {
-            role: "assistant",
-            content: "Sorry, something went wrong. Please try again.",
-          };
-          return updated;
-        });
+      if (!res.ok) {
+        setChatStreaming(false);
         return;
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        setChatMessages((prev) => {
-          const updated = [...prev];
-          updated[updated.length - 1] = {
-            role: "assistant",
-            content: updated[updated.length - 1].content + chunk,
+      // Read plain text stream from toTextStreamResponse
+      if (res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let aiText = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          aiText += decoder.decode(value, { stream: true });
+        }
+        if (aiText.trim()) {
+          const tempAiMsg: DbMessage = {
+            id: Date.now() + 1,
+            created_at: new Date().toISOString(),
+            sender_id: null,
+            receiver_id: session.user.id,
+            sender_role: "ai",
+            content: aiText.trim(),
+            product_id: product.id,
           };
-          return updated;
-        });
+          setChatMessages((prev) => [...prev, tempAiMsg]);
+        } else {
+          const errorMsg: DbMessage = {
+            id: Date.now() + 1,
+            created_at: new Date().toISOString(),
+            sender_id: null,
+            receiver_id: session.user.id,
+            sender_role: "ai",
+            content: "Sorry, I'm temporarily unavailable. Please try again in a few minutes.",
+            product_id: product.id,
+          };
+          setChatMessages((prev) => [...prev, errorMsg]);
+        }
+      } else {
+        console.warn("[chat] res.body is null");
       }
-    } catch {
-      setChatMessages((prev) => {
-        const updated = [...prev];
-        updated[updated.length - 1] = {
-          role: "assistant",
-          content: "Sorry, something went wrong. Please try again.",
-        };
-        return updated;
-      });
+    } catch (err) {
+      console.error("[chat] caught error:", err);
     } finally {
       setChatStreaming(false);
       chatInputRef.current?.focus();
@@ -510,17 +610,17 @@ export default function ProductDetailsCard({
                 </div>
               ) : (
                 <>
-                  {chatMessages.map((msg, i) => (
+                  {chatMessages.map((msg) => (
                     <div
-                      key={i}
-                      className={`flex items-end gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
+                      key={msg.id}
+                      className={`flex items-end gap-2 ${msg.sender_role === "buyer" ? "flex-row-reverse" : ""}`}
                     >
                       <div
                         className={`w-6 h-6 rounded-lg flex-shrink-0 flex items-center justify-center ${
-                          msg.role === "user" ? "bg-gray-900" : "bg-[#EA7B7B]"
+                          msg.sender_role === "buyer" ? "bg-gray-900" : "bg-[#EA7B7B]"
                         }`}
                       >
-                        {msg.role === "user" ? (
+                        {msg.sender_role === "buyer" ? (
                           <User className="w-3.5 h-3.5 text-white" />
                         ) : (
                           <Bot className="w-3.5 h-3.5 text-white" />
@@ -528,23 +628,30 @@ export default function ProductDetailsCard({
                       </div>
                       <div
                         className={`max-w-[78%] px-3 py-2 rounded-2xl text-xs leading-relaxed ${
-                          msg.role === "user"
+                          msg.sender_role === "buyer"
                             ? "bg-gray-900 text-white rounded-br-sm"
                             : "bg-white text-gray-800 rounded-bl-sm border border-gray-100 shadow-sm"
                         }`}
                       >
-                        {msg.content === "" && msg.role === "assistant" ? (
-                          <span className="flex items-center gap-1 py-0.5">
-                            <span className="w-1.5 h-1.5 bg-[#EA7B7B] rounded-full animate-bounce [animation-delay:0ms]" />
-                            <span className="w-1.5 h-1.5 bg-[#EA7B7B] rounded-full animate-bounce [animation-delay:150ms]" />
-                            <span className="w-1.5 h-1.5 bg-[#EA7B7B] rounded-full animate-bounce [animation-delay:300ms]" />
-                          </span>
-                        ) : (
-                          msg.content
-                        )}
+                        {msg.content}
                       </div>
                     </div>
                   ))}
+                  {/* Typing indicator while waiting for AI response via real-time */}
+                  {chatStreaming && (
+                    <div className="flex items-end gap-2">
+                      <div className="w-6 h-6 rounded-lg flex-shrink-0 flex items-center justify-center bg-[#EA7B7B]">
+                        <Bot className="w-3.5 h-3.5 text-white" />
+                      </div>
+                      <div className="px-3 py-2 rounded-2xl rounded-bl-sm bg-white border border-gray-100 shadow-sm">
+                        <span className="flex items-center gap-1 py-0.5">
+                          <span className="w-1.5 h-1.5 bg-[#EA7B7B] rounded-full animate-bounce [animation-delay:0ms]" />
+                          <span className="w-1.5 h-1.5 bg-[#EA7B7B] rounded-full animate-bounce [animation-delay:150ms]" />
+                          <span className="w-1.5 h-1.5 bg-[#EA7B7B] rounded-full animate-bounce [animation-delay:300ms]" />
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   <div ref={chatBottomRef} />
                 </>
               )}
@@ -601,7 +708,7 @@ export default function ProductDetailsCard({
           )}
           {chatMessages.length > 0 && !chatOpen && (
             <span className="absolute -top-1 -right-1 w-5 h-5 bg-gray-900 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-              {chatMessages.filter((m) => m.role === "assistant").length}
+              {chatMessages.filter((m) => m.sender_role === "ai").length}
             </span>
           )}
         </button>

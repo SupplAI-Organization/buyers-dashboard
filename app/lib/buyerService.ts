@@ -6,24 +6,46 @@ import { supabase } from "./supabaseClient";
  * (OAuth users don't have role: 'buyer' in raw_user_meta_data).
  */
 export async function ensureBuyerProfile(userId: string, email: string): Promise<void> {
-  // Check if users row already exists
-  const { data: existingUser } = await supabase
+  // Check if the authenticated user already has a public profile row.
+  const { data: existingUser, error: userLookupError } = await supabase
     .from("users")
     .select("id")
-    .eq("email", email)
-    .single();
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (userLookupError && userLookupError.code !== "PGRST116") {
+    console.error("Error checking user profile:", {
+      code: userLookupError.code,
+      message: userLookupError.message,
+      details: userLookupError.details,
+      hint: userLookupError.hint,
+    });
+    return;
+  }
 
   let publicUserId = existingUser?.id;
 
   if (!existingUser) {
     const { data: newUser, error: userError } = await supabase
       .from("users")
-      .insert({ email, role: "buyer" })
+      .upsert(
+        {
+          id: userId,
+          email,
+          role: "buyer",
+        },
+        { onConflict: "id" },
+      )
       .select("id")
       .single();
 
     if (userError) {
-      console.error("Error creating user profile:", userError);
+      console.error("Error creating user profile:", {
+        code: userError.code,
+        message: userError.message,
+        details: userError.details,
+        hint: userError.hint,
+      });
       return;
     }
     publicUserId = newUser?.id;
@@ -32,11 +54,21 @@ export async function ensureBuyerProfile(userId: string, email: string): Promise
   if (!publicUserId) return;
 
   // Check if buyers row already exists
-  const { data: existingBuyer } = await supabase
+  const { data: existingBuyer, error: buyerLookupError } = await supabase
     .from("buyers")
     .select("id")
     .eq("user_id", publicUserId)
-    .single();
+    .maybeSingle();
+
+  if (buyerLookupError && buyerLookupError.code !== "PGRST116") {
+    console.error("Error checking buyer profile:", {
+      code: buyerLookupError.code,
+      message: buyerLookupError.message,
+      details: buyerLookupError.details,
+      hint: buyerLookupError.hint,
+    });
+    return;
+  }
 
   if (!existingBuyer) {
     const { error: buyerError } = await supabase
@@ -44,7 +76,12 @@ export async function ensureBuyerProfile(userId: string, email: string): Promise
       .insert({ user_id: publicUserId });
 
     if (buyerError) {
-      console.error("Error creating buyer profile:", buyerError);
+      console.error("Error creating buyer profile:", {
+        code: buyerError.code,
+        message: buyerError.message,
+        details: buyerError.details,
+        hint: buyerError.hint,
+      });
     }
   }
 }
