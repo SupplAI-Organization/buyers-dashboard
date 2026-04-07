@@ -205,11 +205,10 @@ export default function UserProfilePage() {
 
     setSaving(true);
     try {
-      // Use upsert to handle both new and existing profiles
-      const { error } = await supabase.from("users").upsert(
-        {
-          id: user.id,
-          email: user.email,
+      // Use update since the profile should already be created by fetchOrCreateUserProfile
+      const { error } = await supabase
+        .from("users")
+        .update({
           business_name: editedData.business_name,
           business_type: editedData.business_type,
           gstin: editedData.gstin,
@@ -217,9 +216,8 @@ export default function UserProfilePage() {
           contact_number: editedData.contact_number,
           business_address: editedData.business_address,
           updated_at: new Date().toISOString(),
-        },
-        { onConflict: "email" },
-      );
+        })
+        .eq("id", user.id);
 
       if (error) {
         console.error(
