@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -10,13 +10,16 @@ import CategoryBar from "./components/CategoryBar";
 import HeroSection from "./components/HeroSection";
 import ProductGrid from "./components/ProductGrid";
 import { getOrCreateCart } from "@/lib/cartService";
+import { ensureBuyerProfile } from "@/lib/buyerService";
 
 export default function DashboardHomePage() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [cartCount, setCartCount] = useState(0);
+  const cartChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     const checkUser = async () => {
@@ -25,13 +28,18 @@ export default function DashboardHomePage() {
         router.replace("/login");
       } else {
         setUser(data.user);
+        await ensureBuyerProfile(data.user.id, data.user.email!);
         initCart(data.user.id);
       }
+      setLoading(false);
     };
     checkUser();
 
     return () => {
-      supabase.channel("cart-count-channel").unsubscribe();
+      if (cartChannelRef.current) {
+        supabase.removeChannel(cartChannelRef.current);
+        cartChannelRef.current = null;
+      }
     };
   }, [router]);
 
@@ -41,7 +49,7 @@ export default function DashboardHomePage() {
       updateCartCount(cart.id);
 
       // Subscribe to changes in this cart
-      supabase
+      cartChannelRef.current = supabase
         .channel("cart-count-channel")
         .on(
           "postgres_changes",
@@ -77,7 +85,12 @@ export default function DashboardHomePage() {
     setSearchQuery("");
   };
 
-  if (!user) return null;
+  if (loading)
+    return (
+      <div className="min-h-screen bg-[#f5f6fa] flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-[#EA7B7B] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
 
   return (
     <div className="min-h-screen bg-[#f5f6fa]">

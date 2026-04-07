@@ -58,6 +58,11 @@ export default function LoginForm() {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          data: {
+            role: 'buyer',
+          },
+        },
       });
 
       if (error) {
@@ -83,7 +88,7 @@ export default function LoginForm() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/dashboard/homepage`,
+          redirectTo: `${window.location.origin}/auth/callback`,
         },
       });
 
@@ -102,7 +107,7 @@ export default function LoginForm() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "azure",
       options: {
-        redirectTo: `${window.location.origin}/dashboard/homepage`,
+        redirectTo: `${window.location.origin}/auth/callback`,
       },
     });
 
@@ -185,8 +190,8 @@ export default function LoginForm() {
               type="button"
               onClick={() => setIsLogin(true)}
               className={`flex-1 py-2.5 text-sm font-medium rounded-full transition-all ${isLogin
-                  ? "bg-white text-gray-900 shadow-sm"
-                  : "text-gray-600 hover:text-gray-900"
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-600 hover:text-gray-900"
                 }`}
             >
               Sign In
@@ -195,8 +200,8 @@ export default function LoginForm() {
               type="button"
               onClick={() => setIsLogin(false)}
               className={`flex-1 py-2.5 text-sm font-medium rounded-full transition-all ${!isLogin
-                  ? "bg-white text-gray-900 shadow-sm"
-                  : "text-gray-600 hover:text-gray-900"
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-600 hover:text-gray-900"
                 }`}
             >
               Sign Up
