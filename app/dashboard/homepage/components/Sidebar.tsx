@@ -17,7 +17,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 
 const menuItems = [
-  { icon: Home, label: "Home", href: "/dashboard/homepage" },
+  { icon: Home, label: "Home", href: "/dashboard/homepage2" },
   { icon: ShoppingCart, label: "Orders", href: "/dashboard/orders" },
   { icon: Heart, label: "Wishlist", href: "/dashboard/wishlist" },
   { icon: ClipboardList, label: "Quotes", href: "/dashboard/quotes" },

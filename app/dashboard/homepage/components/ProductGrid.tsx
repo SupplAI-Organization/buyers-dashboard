@@ -16,12 +16,14 @@ import { Loader2, Package, CheckCircle2, AlertCircle } from "lucide-react";
 interface ProductGridProps {
   selectedCategory: string | null;
   searchQuery: string;
+  supplierId?: string | null;
   user: any;
 }
 
 export default function ProductGrid({
   selectedCategory,
   searchQuery,
+  supplierId,
   user,
 }: ProductGridProps) {
   const router = useRouter();
@@ -47,7 +49,16 @@ export default function ProductGrid({
       try {
         let data: Product[];
 
-        if (searchQuery) {
+        if (supplierId) {
+          const { data: sellerData, error: sellerError } = await supabase
+            .from("products")
+            .select("*")
+            .eq("supplier_id", supplierId)
+            .eq("is_listed", true);
+            
+          if (sellerError) throw sellerError;
+          data = sellerData as Product[];
+        } else if (searchQuery) {
           data = await searchProducts(searchQuery);
         } else if (selectedCategory) {
           data = await fetchProductsByCategory(selectedCategory);
