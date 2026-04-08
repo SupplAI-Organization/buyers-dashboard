@@ -45,7 +45,7 @@ export default function LoginForm() {
 
       // SUCCESS
       console.log("Logged in successfully");
-      router.push("/dashboard/homepage");
+      router.push("/dashboard/homepage2");
     }
 
     // SIGN UP
