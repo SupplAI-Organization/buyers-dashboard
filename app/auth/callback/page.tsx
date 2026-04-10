@@ -15,7 +15,7 @@ export default function AuthCallback() {
         await supabase.auth.exchangeCodeForSession(code);
       }
 
-      router.replace("/dashboard/homepage");
+      router.replace("/dashboard/homepage2");
     };
 
     handleCallback();
