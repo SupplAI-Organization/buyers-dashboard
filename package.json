@@ -10,7 +10,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@ai-sdk/google": "^3.0.59",
+    "@ai-sdk/google": "^3.0.58",
+    "@mendable/firecrawl-js": "^4.18.1",
     "@supabase/supabase-js": "^2.95.3",
     "ai": "^6.0.149",
     "lucide-react": "^0.563.0",
