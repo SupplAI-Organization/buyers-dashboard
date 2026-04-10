@@ -23,41 +23,41 @@ export interface Cart {
  */
 export async function getOrCreateCart(userId: string): Promise<Cart | null> {
   // 1. Try to find existing cart
-  const { data: cart, error } = await supabase
+  const { data: cartList, error } = await supabase
     .from("cart")
     .select("*")
     .eq("buyer_id", userId)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1);
 
-  if (error && error.code !== "PGRST116") {
-    // PGRST116 is "No rows found"
+  if (error) {
     console.error("Error fetching cart:", error);
     return null;
   }
 
-  if (cart) {
-    return cart;
+  if (cartList && cartList.length > 0) {
+    return cartList[0];
   }
 
   // 2. Create new cart if none exists
-  const { data: newCart, error: createError } = await supabase
+  const { data: newCartList, error: createError } = await supabase
     .from("cart")
     .insert([{ buyer_id: userId }])
     .select()
-    .single();
+    .limit(1);
 
   if (createError) {
     if (createError.code === "23505") {
       // Duplicate key violation - means cart was created concurrently.
       // Retry fetching.
-      const { data: retryCart, error: retryError } = await supabase
+      const { data: retryCartList } = await supabase
         .from("cart")
         .select("*")
         .eq("buyer_id", userId)
-        .single();
+        .order("created_at", { ascending: true })
+        .limit(1);
 
-      if (retryCart) return retryCart;
-      console.error("Error fetching cart after duplicate error:", retryError);
+      if (retryCartList && retryCartList.length > 0) return retryCartList[0];
       return null;
     }
 
@@ -70,7 +70,7 @@ export async function getOrCreateCart(userId: string): Promise<Cart | null> {
     return null;
   }
 
-  return newCart;
+  return newCartList ? newCartList[0] : null;
 }
 
 /**
@@ -81,6 +81,14 @@ export async function getCartWithItems(userId: string): Promise<Cart | null> {
   const cart = await getOrCreateCart(userId);
   if (!cart) return null;
 
+  // Get all cart IDs for this user to consolidate items spread across duplicates
+  const { data: userCarts } = await supabase
+    .from("cart")
+    .select("id")
+    .eq("buyer_id", userId);
+  
+  const cartIds = userCarts?.map(c => c.id) || [cart.id];
+
   // Fetch items with product details
   const { data: items, error } = await supabase
     .from("cart_items")
@@ -90,7 +98,7 @@ export async function getCartWithItems(userId: string): Promise<Cart | null> {
       product:products (*)
     `,
     )
-    .eq("cart_id", cart.id);
+    .in("cart_id", cartIds);
 
   if (error) {
     console.error("Error fetching cart items:", error);
@@ -111,13 +119,21 @@ export async function addToCart(
   const cart = await getOrCreateCart(userId);
   if (!cart) return false;
 
-  // Check if item already exists
-  const { data: existingItem } = await supabase
+  const { data: userCarts } = await supabase
+    .from("cart")
+    .select("id")
+    .eq("buyer_id", userId);
+  const cartIds = userCarts?.map(c => c.id) || [cart.id];
+
+  // Check if item already exists across any of the user's carts
+  const { data: existingItems } = await supabase
     .from("cart_items")
     .select("*")
-    .eq("cart_id", cart.id)
+    .in("cart_id", cartIds)
     .eq("product_id", productId)
-    .single();
+    .limit(1);
+    
+  const existingItem = existingItems && existingItems.length > 0 ? existingItems[0] : null;
 
   if (existingItem) {
     // Update quantity
@@ -179,17 +195,30 @@ export async function removeCartItem(itemId: string): Promise<boolean> {
  * Clear all items from the user's cart
  */
 export async function clearCart(userId: string): Promise<boolean> {
-  const cart = await getOrCreateCart(userId);
-  if (!cart) return false;
+  // Get all cart IDs for this user
+  const { data: userCarts } = await supabase
+    .from("cart")
+    .select("id")
+    .eq("buyer_id", userId);
+  
+  if (!userCarts || userCarts.length === 0) return true;
+  
+  const cartIds = userCarts.map(c => c.id);
 
   const { error } = await supabase
     .from("cart_items")
     .delete()
-    .eq("cart_id", cart.id);
+    .in("cart_id", cartIds);
 
   if (error) {
     console.error("Error clearing cart:", error);
     return false;
+  }
+
+  // Optional: delete duplicated carts
+  if (cartIds.length > 1) {
+    const cartsToDelete = cartIds.slice(1);
+    await supabase.from("cart").delete().in("id", cartsToDelete);
   }
 
   return true;
