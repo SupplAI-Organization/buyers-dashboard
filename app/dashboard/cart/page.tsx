@@ -40,6 +40,8 @@ export default function CartPage() {
         const mappedItems = cart.items.map((item: any) => ({
           ...item.product,
           id: item.id, // Using CartItem ID reference
+          product_id: item.product_id, // Keep the original product ID for checkout
+          supplier_id: item.product?.supplier_id, // Keep the supplier ID for checkout
           quantity: item.quantity,
         }));
         setCartItems(mappedItems);
@@ -98,12 +100,12 @@ export default function CartPage() {
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
-          <Link
-            href="/dashboard/homepage"
+          <button
+            onClick={() => router.back()}
             className="p-2 hover:bg-white rounded-xl transition-colors"
           >
             <ArrowLeft className="w-6 h-6 text-gray-600" />
-          </Link>
+          </button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Shopping Cart</h1>
             <p className="text-gray-500 text-sm mt-1">

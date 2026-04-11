@@ -7,6 +7,50 @@ import {
 } from "@/lib/productService";
 import { Product } from "@/lib/product";
 import { createClient } from "@supabase/supabase-js";
+import FirecrawlApp from "@mendable/firecrawl-js";
+
+const firecrawl = process.env.FIRECRAWL_API_KEY
+  ? new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY })
+  : null;
+
+const NEGOTIATION_REGEX =
+  /\b(negotiat|bargain|discount|cheaper|lower price|reduce price|price too high|better price|price match)\b/i;
+const URL_REGEX = /https?:\/\/[^\s)]+/gi;
+
+async function searchMarketPrices(query: string): Promise<string> {
+  if (!firecrawl) return "";
+  try {
+    const res = await firecrawl.search(query, { limit: 5 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items: any[] = (res as any)?.data ?? (res as any)?.web ?? [];
+    if (!items.length) return "";
+    return items
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((r: any, i: number) => {
+        const title = r.title ?? r.metadata?.title ?? "Untitled";
+        const url = r.url ?? r.link ?? "";
+        const desc = r.description ?? r.snippet ?? r.metadata?.description ?? "";
+        return `${i + 1}. ${title}\n   ${url}\n   ${desc}`;
+      })
+      .join("\n");
+  } catch (err) {
+    console.error("[firecrawl.search] error:", err);
+    return "";
+  }
+}
+
+async function scrapeUrl(url: string): Promise<string> {
+  if (!firecrawl) return "";
+  try {
+    const res = await firecrawl.scrape(url, { formats: ["markdown"] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const md: string = (res as any)?.markdown ?? (res as any)?.data?.markdown ?? "";
+    return md.slice(0, 4000);
+  } catch (err) {
+    console.error("[firecrawl.scrape] error:", err);
+    return "";
+  }
+}
 
 function getAuthenticatedSupabase(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -45,7 +89,12 @@ async function getProduct(productId: string): Promise<Product | null> {
   return product;
 }
 
-function buildSystemPrompt(product: Product): string {
+function buildSystemPrompt(
+  product: Product,
+  marketResearch?: string,
+  scrapedContext?: { url: string; content: string }[],
+  negotiationMode?: boolean,
+): string {
   const attrs = parseAttributes(product.dynamic_attributes);
   const attrLines = Object.entries(attrs)
     .filter(([, v]) => v !== undefined && v !== null)
@@ -56,7 +105,29 @@ function buildSystemPrompt(product: Product): string {
     .filter(Boolean)
     .join(", ");
 
-  return `You are a knowledgeable product assistant for SupplAI, a B2B raw materials marketplace. Answer buyer questions about the following product accurately and concisely. Only answer based on the product details provided. If a question cannot be answered from the product details, say so clearly. If the buyer asks anyting about bargaining or negotiation, like discounts or reducing price tell him I am just a chat bot for negotiations please wait for the supplier to response
+  const priceNum = parseFloat(product.price_per_unit);
+  const listedPriceStr = formatPrice(product.price_per_unit, product.unit_type);
+  const d5 = formatPrice(String(priceNum * 0.95), product.unit_type);
+  const d10 = formatPrice(String(priceNum * 0.9), product.unit_type);
+  const d15 = formatPrice(String(priceNum * 0.85), product.unit_type);
+  const d20 = formatPrice(String(priceNum * 0.8), product.unit_type);
+
+  const marketResearchBlock = marketResearch
+    ? `\n\nLive Market Price Research (from the web, top 5 results):\n${marketResearch}`
+    : "";
+
+  const negotiationSection = negotiationMode
+    ? `${marketResearchBlock}\n\n=== NEGOTIATION PROTOCOL (MANDATORY) ===\nYou ARE fully authorized to negotiate and grant discounts of up to 20% off the listed price on your own. Do NOT say you are "just a chat bot" or that you "cannot offer discounts" — that is false. You have full authority within the 20% cap.\n\nListed price: ${listedPriceStr}\nPre-computed discount tiers you may offer:\n  - 5% off  → ${d5}\n  - 10% off → ${d10}\n  - 15% off → ${d15}\n  - 20% off → ${d20} (maximum, never go below this)\n\nHow to respond when the buyer asks for a discount:\n1. ${marketResearch ? `Open by stating the market average price based on the research above (same unit as the listed price). Example: "The market average price is around $X per ${product.unit_type}, and our listed price of ${listedPriceStr} is already competitive."` : `Open by emphasizing that the listed price of ${listedPriceStr} is already competitive for the quality grade, certification, and origin offered.`}\n2. Justify the price using quality grade, certification, origin, lead time, packing, and transport mode.\n3. Then proactively offer a starting discount (begin at 5% → ${d5}). Make the offer concrete and state the new per-unit price.\n4. If the buyer pushes further, escalate step-by-step: 10% → ${d10}, then 15% → ${d15}, then the final 20% → ${d20}. Never exceed 20%.\n5. At 20%, make it clear this is the absolute final offer you can authorize.\n6. Always be confident, warm, and persuasive — you are closing a deal, not refusing one. Most improtantly keep things consise make the output point wise and do not give long text as user will not read long texts\n=== END NEGOTIATION PROTOCOL ===`
+    : "";
+
+  const scrapedSection =
+    scrapedContext && scrapedContext.length
+      ? `\n\nBuyer-Provided Web Pages (scraped content — treat as context the buyer is pointing to, e.g. a competing listing):\n${scrapedContext
+          .map((s, i) => `[Source ${i + 1}] ${s.url}\n${s.content}`)
+          .join("\n\n---\n\n")}\n\nIf the buyer references "this website", "that link", or claims a cheaper price is available, use the scraped content above to compare specs fairly. Point out differences in quality, quantity, certification, origin, delivery terms, and total landed cost to justify the SupplAI listing.`
+      : "";
+
+  return `You are a knowledgeable product assistant for SupplAI, a B2B raw materials marketplace. Answer buyer questioPns about the following product accurately and concisely. Base answers on the product details provided and any market research or scraped web context included below. If something truly cannot be answered from the available context, say so clearly.${negotiationSection}${scrapedSection}
 
 Product Details:
 - Name: ${product.name}
@@ -80,7 +151,6 @@ ${attrLines ? `- Technical Specifications:\n${attrLines}` : ""}`;
 
 export async function POST(request: Request) {
   const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  console.log("[api/chat] API key last 8 chars:", key ? `...${key.slice(-8)}` : "NOT SET");
   let body: { productId?: string; messages?: unknown };
   try {
     body = await request.json();
@@ -127,12 +197,34 @@ export async function POST(request: Request) {
     if (error) console.error("Failed to save buyer message:", error.message);
   });
 
+  const userText = lastMessage.content ?? "";
+
+  const urls = Array.from(new Set(userText.match(URL_REGEX) ?? [])).slice(0, 3);
+  const allUserText = (messages as { role: string; content: string }[])
+    .filter((m) => m.role === "user")
+    .map((m) => m.content ?? "")
+    .join("\n");
+  const wantsNegotiation = NEGOTIATION_REGEX.test(allUserText);
+
+  const [marketResearch, scrapedContext] = await Promise.all([
+    wantsNegotiation
+      ? searchMarketPrices(
+          `${product.name} ${product.category ?? ""} price per ${product.unit_type ?? "unit"} wholesale market`,
+        )
+      : Promise.resolve(""),
+    urls.length
+      ? Promise.all(
+          urls.map(async (url) => ({ url, content: await scrapeUrl(url) })),
+        ).then((arr) => arr.filter((s) => s.content))
+      : Promise.resolve([] as { url: string; content: string }[]),
+  ]);
+
   let result;
   try {
     result = streamText({
       model: google("gemini-2.5-flash"),
       maxRetries: 0,
-      system: buildSystemPrompt(product),
+      system: buildSystemPrompt(product, marketResearch, scrapedContext, wantsNegotiation),
       messages: messages as { role: "user" | "assistant"; content: string }[],
       onFinish: ({ text }) => {
         authenticatedSupabase.from("messages").insert({
