@@ -10,6 +10,10 @@ export interface Company {
   business_name: string;
   business_type: string;
   role: string;
+  gstin?: string;
+  is_verified?: boolean;
+  business_address?: string;
+  contact_person?: string;
   // you might have more fields
 }
 
