@@ -29,7 +29,8 @@ export default function CheckoutPage() {
                 if (cart && cart.items && cart.items.length > 0) {
                     const mappedItems = cart.items.map((item: any) => ({
                         ...item.product,
-                        id: item.product_id,
+                        id: item.product_id, // Important: use product_id for checkout to match what BuyNowContent expects
+                        supplier_id: item.product?.supplier_id,
                         cart_item_id: item.id,
                         quantity: item.quantity,
                     }));
