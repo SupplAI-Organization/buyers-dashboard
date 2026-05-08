@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import ReactMarkdown from "react-markdown";
@@ -14,10 +14,13 @@ import {
   BadgeCheck,
   Loader2,
   Plus,
+  MessageSquare,
+  RefreshCw,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
-import type { GraphData, GraphDetail, GraphNode, GraphEdge } from "@/lib/graph";
+import type { GraphData, GraphDetail } from "@/lib/graph";
 import { loadMarketplaceGraph } from "@/lib/marketplaceGraph";
+import { mergeUserNotes } from "@/lib/userNotesGraph";
 import Sidebar from "../../homepage/components/Sidebar";
 import Topbar from "../../homepage/components/Topbar";
 
@@ -44,13 +47,14 @@ export default function KnowledgeBaseClient({ data }: Props) {
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketError, setMarketError] = useState<string | null>(null);
 
-  // Locally-added concept notes (UI only — not persisted)
-  const [localConcept, setLocalConcept] = useState<GraphData>({
-    nodes: [],
-    edges: [],
-    details: {},
-  });
+  // Concept graph = seed (props) + buyer's saved notes from Supabase.
+  const [conceptData, setConceptData] = useState<GraphData>(data);
   const [showAddModal, setShowAddModal] = useState(false);
+
+  const reloadConcepts = async () => {
+    const merged = await mergeUserNotes(data);
+    setConceptData(merged);
+  };
 
   useEffect(() => {
     const checkUser = async () => {
@@ -59,55 +63,50 @@ export default function KnowledgeBaseClient({ data }: Props) {
         router.replace("/login");
       } else {
         setUser(authData.user);
+        // Once authed, pull any custom notes the buyer has saved.
+        const merged = await mergeUserNotes(data);
+        setConceptData(merged);
       }
       setAuthLoading(false);
     };
     checkUser();
-  }, [router]);
+  }, [router, data]);
 
+  // Refetch every time the user enters marketplace mode so newly-persisted
+  // chats from /dashboard/agent show up without a hard page reload.
   useEffect(() => {
-    if (mode !== "marketplace" || marketData || marketLoading) return;
+    if (mode !== "marketplace") return;
+    let cancelled = false;
+    setMarketLoading(true);
+    setMarketError(null);
+    loadMarketplaceGraph()
+      .then((g) => {
+        if (!cancelled) setMarketData(g);
+      })
+      .catch((err) => {
+        if (!cancelled) setMarketError(err?.message ?? "Failed to load marketplace graph");
+      })
+      .finally(() => {
+        if (!cancelled) setMarketLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+
+  const refreshMarketplace = () => {
     setMarketLoading(true);
     setMarketError(null);
     loadMarketplaceGraph()
       .then((g) => setMarketData(g))
       .catch((err) => setMarketError(err?.message ?? "Failed to load marketplace graph"))
       .finally(() => setMarketLoading(false));
-  }, [mode, marketData, marketLoading]);
+  };
 
-  const mergedConcept: GraphData = useMemo(() => {
-    if (localConcept.nodes.length === 0) return data;
-
-    const WIKI_LINK = /\[\[([^\]\n]+?)\]\]/g;
-    const details = { ...data.details, ...localConcept.details };
-    const nodes = [...data.nodes, ...localConcept.nodes];
-
-    // Recompute edges for the locally-added notes against the merged detail set.
-    const edges: GraphEdge[] = [...data.edges];
-    const seen = new Set(edges.map((e) => [e.source, e.target].sort().join("|")));
-
-    for (const n of localConcept.nodes) {
-      const d = details[n.id];
-      if (!d || d.kind !== "concept") continue;
-      for (const m of d.content.matchAll(WIKI_LINK)) {
-        const target = m[1].trim().toLowerCase();
-        if (!target || target === n.id || !details[target]) continue;
-        const key = [n.id, target].sort().join("|");
-        if (seen.has(key)) continue;
-        seen.add(key);
-        edges.push({ id: `e-${key}`, source: n.id, target });
-      }
-    }
-
-    return { nodes, edges, details };
-  }, [data, localConcept]);
-
-  const activeData: GraphData = useMemo(() => {
-    if (mode === "marketplace") {
-      return marketData ?? { nodes: [], edges: [], details: {} };
-    }
-    return mergedConcept;
-  }, [mode, marketData, mergedConcept]);
+  const activeData: GraphData =
+    mode === "marketplace"
+      ? marketData ?? { nodes: [], edges: [], details: {} }
+      : conceptData;
 
   if (authLoading) {
     return (
@@ -147,6 +146,19 @@ export default function KnowledgeBaseClient({ data }: Props) {
             </div>
 
             <div className="flex items-center gap-2">
+            {mode === "marketplace" && (
+              <button
+                type="button"
+                onClick={refreshMarketplace}
+                disabled={marketLoading}
+                className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-50"
+                title="Reload marketplace graph (picks up new chats)"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${marketLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </button>
+            )}
+
             {mode === "concepts" && (
               <button
                 type="button"
@@ -237,6 +249,9 @@ export default function KnowledgeBaseClient({ data }: Props) {
                   <span className="flex items-center gap-1">
                     <span className="h-2 w-2 rounded-full bg-amber-400" /> category
                   </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-2 w-2 rounded-sm bg-pink-400" /> chat
+                  </span>
                 </div>
               )}
 
@@ -272,14 +287,10 @@ export default function KnowledgeBaseClient({ data }: Props) {
         <AddNoteModal
           existingIds={new Set(Object.keys(activeData.details))}
           onClose={() => setShowAddModal(false)}
-          onSave={(node, detail) => {
-            setLocalConcept((prev) => ({
-              nodes: [...prev.nodes, node],
-              edges: prev.edges,
-              details: { ...prev.details, [node.id]: detail },
-            }));
+          onSaved={async (slug) => {
             setShowAddModal(false);
-            setSelectedId(node.id);
+            setSelectedId(slug);
+            await reloadConcepts();
           }}
         />
       )}
@@ -348,6 +359,8 @@ function DrawerHeader({ detail, onClose }: { detail: GraphDetail; onClose: () =>
         return { Icon: Package, color: "text-emerald-500" };
       case "category":
         return { Icon: Tag, color: "text-amber-500" };
+      case "chat":
+        return { Icon: MessageSquare, color: "text-pink-500" };
     }
   })();
 
@@ -487,6 +500,42 @@ function DrawerBody({
           </p>
         </div>
       );
+
+    case "chat":
+      return (
+        <div className="px-5 py-4 text-sm text-slate-700 space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center rounded-full bg-pink-50 px-2 py-0.5 text-xs font-medium text-pink-700">
+              Chat history
+            </span>
+          </div>
+          <DetailRow label="Messages" value={String(detail.message_count)} />
+          <DetailRow label="Linked products" value={String(detail.product_links)} />
+          <DetailRow label="Linked sellers" value={String(detail.seller_links)} />
+          <DetailRow
+            label="Last activity"
+            value={new Date(detail.updated_at).toLocaleString()}
+          />
+          <p className="text-xs text-slate-500">
+            Edges connect this conversation to every product and seller it referenced.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== "undefined") {
+                window.localStorage.setItem(
+                  "agent_conversation_id",
+                  detail.conversationId,
+                );
+              }
+              router.push("/dashboard/agent");
+            }}
+            className="mt-2 w-full rounded-lg bg-[#EA7B7B] px-3 py-2 text-xs font-medium text-white hover:bg-[#d96868]"
+          >
+            Resume this chat
+          </button>
+        </div>
+      );
   }
 }
 
@@ -504,15 +553,16 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 function AddNoteModal({
   existingIds,
   onClose,
-  onSave,
+  onSaved,
 }: {
   existingIds: Set<string>;
   onClose: () => void;
-  onSave: (node: GraphNode, detail: GraphDetail) => void;
+  onSaved: (slug: string) => void;
 }) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const slug = title
     .trim()
@@ -521,7 +571,7 @@ function AddNoteModal({
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-]/g, "");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
       setError("Title is required");
@@ -540,14 +590,34 @@ function AddNoteModal({
       return;
     }
 
-    const node: GraphNode = { id: slug, label: title.trim(), kind: "concept" };
-    const detail: GraphDetail = {
-      kind: "concept",
-      id: slug,
-      title: title.trim(),
-      content,
-    };
-    onSave(node, detail);
+    setSaving(true);
+    setError(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        setError("You're signed out — please log in again.");
+        return;
+      }
+      const res = await fetch("/api/notes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title: title.trim(), content }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json?.error ?? `Save failed (${res.status})`);
+        return;
+      }
+      onSaved(json.id as string);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -621,15 +691,18 @@ function AddNoteModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+              disabled={saving}
+              className="rounded-lg px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-100 disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="rounded-lg bg-[#EA7B7B] px-4 py-2 text-xs font-medium text-white transition hover:bg-[#d96868]"
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#EA7B7B] px-4 py-2 text-xs font-medium text-white transition hover:bg-[#d96868] disabled:opacity-60"
             >
-              Save note
+              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {saving ? "Saving…" : "Save note"}
             </button>
           </div>
         </form>

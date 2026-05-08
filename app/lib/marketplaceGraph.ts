@@ -9,6 +9,7 @@ import type {
 const SELLER_PREFIX = "seller-";
 const PRODUCT_PREFIX = "product-";
 const CATEGORY_PREFIX = "category-";
+const CHAT_PREFIX = "chat-";
 
 type RawSeller = {
   id: string;
@@ -160,5 +161,167 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
     edges.push({ id: `e-${productId}-${categoryId}`, source: productId, target: categoryId });
   }
 
+  // ── Chat nodes (current user's saved conversations) ────────────────────────
+  // Each agent_conversations row becomes a node. We scan its messages' `parts`
+  // for tool outputs that reference product/seller IDs and draw edges to the
+  // corresponding product/seller nodes already in the graph.
+  const { data: convs } = await supabase
+    .from("agent_conversations")
+    .select("id, title, updated_at")
+    .order("updated_at", { ascending: false })
+    .limit(50);
+
+  if (convs && convs.length > 0) {
+    const convIds = convs.map((c) => c.id as string);
+    const { data: messages } = await supabase
+      .from("agent_messages")
+      .select("conversation_id, parts")
+      .in("conversation_id", convIds);
+
+    const partsByConv = new Map<string, unknown[][]>();
+    for (const m of messages ?? []) {
+      const cid = m.conversation_id as string;
+      if (!partsByConv.has(cid)) partsByConv.set(cid, []);
+      partsByConv.get(cid)!.push((m.parts as unknown[]) ?? []);
+    }
+
+    for (const c of convs) {
+      const cid = c.id as string;
+      const chatNodeId = `${CHAT_PREFIX}${cid}`;
+      const allParts = (partsByConv.get(cid) ?? []).flat();
+      const { productIds, sellerIds } = extractMarketplaceRefs(allParts);
+
+      const linkedProducts = [...productIds].filter(
+        (id) => details[`${PRODUCT_PREFIX}${id}`],
+      );
+      const linkedSellers = [...sellerIds].filter(
+        (id) => details[`${SELLER_PREFIX}${id}`],
+      );
+
+      const messageCount = (partsByConv.get(cid) ?? []).length;
+      // Skip only truly empty chats (no messages saved at all).
+      if (messageCount === 0) continue;
+      nodes.push({
+        id: chatNodeId,
+        label: (c.title as string) || "Untitled chat",
+        kind: "chat",
+        weight: linkedProducts.length + linkedSellers.length,
+      });
+      details[chatNodeId] = {
+        kind: "chat",
+        id: chatNodeId,
+        conversationId: cid,
+        title: (c.title as string) || "Untitled chat",
+        updated_at: c.updated_at as string,
+        message_count: messageCount,
+        product_links: linkedProducts.length,
+        seller_links: linkedSellers.length,
+      };
+
+      for (const pid of linkedProducts) {
+        edges.push({
+          id: `e-${chatNodeId}-${PRODUCT_PREFIX}${pid}`,
+          source: chatNodeId,
+          target: `${PRODUCT_PREFIX}${pid}`,
+        });
+      }
+      for (const sid of linkedSellers) {
+        edges.push({
+          id: `e-${chatNodeId}-${SELLER_PREFIX}${sid}`,
+          source: chatNodeId,
+          target: `${SELLER_PREFIX}${sid}`,
+        });
+      }
+    }
+  }
+
   return { nodes, edges, details };
+}
+
+// Walk a message's `parts` array and pull out any product or seller UUIDs
+// referenced by tool inputs/outputs. Tool part type names follow the
+// convention `tool-<toolName>` and carry the SDK's tool-call envelope:
+//   { type: "tool-searchProducts", state: "output-available", input: {...},
+//     output: { products: [{ id, ... }, ...] } }
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function extractMarketplaceRefs(parts: unknown[]): {
+  productIds: Set<string>;
+  sellerIds: Set<string>;
+} {
+  const productIds = new Set<string>();
+  const sellerIds = new Set<string>();
+
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as Record<string, unknown>;
+    const type = typeof p.type === "string" ? p.type : "";
+    if (!type.startsWith("tool-")) continue;
+
+    const toolName = type.slice("tool-".length);
+    const output = p.output as Record<string, unknown> | undefined;
+    const input = p.input as Record<string, unknown> | undefined;
+
+    // ── product-yielding tools ────────────────────────────────────────────
+    if (toolName === "searchProducts" && output?.products) {
+      for (const row of output.products as Record<string, unknown>[]) {
+        const id = row?.id;
+        if (typeof id === "string" && UUID_RE.test(id)) productIds.add(id);
+        const sid = row?.seller_id ?? row?.supplier_id;
+        if (typeof sid === "string" && UUID_RE.test(sid)) sellerIds.add(sid);
+      }
+    }
+    if (toolName === "getProductDetails") {
+      const prod = output?.product as Record<string, unknown> | undefined;
+      const sell = output?.seller as Record<string, unknown> | undefined;
+      const pid = prod?.id ?? input?.productId;
+      if (typeof pid === "string" && UUID_RE.test(pid)) productIds.add(pid);
+      const sid = sell?.id;
+      if (typeof sid === "string" && UUID_RE.test(sid)) sellerIds.add(sid);
+    }
+    if (toolName === "addToCart") {
+      const prod = output?.product as Record<string, unknown> | undefined;
+      const pid = prod?.id ?? input?.productId;
+      if (typeof pid === "string" && UUID_RE.test(pid)) productIds.add(pid);
+    }
+    if (toolName === "updateCartItemQuantity" || toolName === "removeFromCart") {
+      const prod = output?.product as Record<string, unknown> | undefined;
+      const pid = prod?.id;
+      if (typeof pid === "string" && UUID_RE.test(pid)) productIds.add(pid);
+    }
+    if (toolName === "viewCart" && output?.items) {
+      for (const it of output.items as Record<string, unknown>[]) {
+        const pid = it?.product_id;
+        if (typeof pid === "string" && UUID_RE.test(pid)) productIds.add(pid);
+      }
+    }
+
+    // ── seller-yielding tools ─────────────────────────────────────────────
+    if (toolName === "searchSellers" && output?.sellers) {
+      for (const row of output.sellers as Record<string, unknown>[]) {
+        const id = row?.id;
+        if (typeof id === "string" && UUID_RE.test(id)) sellerIds.add(id);
+      }
+    }
+    if (toolName === "getSellerDetails") {
+      const sell = output?.seller as Record<string, unknown> | undefined;
+      const sid = sell?.id ?? input?.sellerId;
+      if (typeof sid === "string" && UUID_RE.test(sid)) sellerIds.add(sid);
+    }
+    if (toolName === "compareSellers" && output?.sellers) {
+      for (const row of output.sellers as Record<string, unknown>[]) {
+        const id = row?.id;
+        if (typeof id === "string" && UUID_RE.test(id)) sellerIds.add(id);
+      }
+      const ids = input?.sellerIds;
+      if (Array.isArray(ids)) {
+        for (const id of ids) {
+          if (typeof id === "string" && UUID_RE.test(id)) sellerIds.add(id);
+        }
+      }
+    }
+  }
+
+  return { productIds, sellerIds };
 }

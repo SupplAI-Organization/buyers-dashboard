@@ -1,8 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Product } from "@/lib/product";
 import { formatPrice } from "@/lib/productService";
 import { createOrderItem, createOrderWithItems } from "@/lib/orderService";
+import { getWallet, debitWallet } from "@/lib/walletService";
 import {
     ArrowLeft,
     Loader2,
@@ -15,6 +16,7 @@ import {
     Minus,
     Plus,
     AlertCircle,
+    Wallet,
 } from "lucide-react";
 
 interface BuyNowContentProps {
@@ -34,6 +36,18 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
     const [shippingAddress, setShippingAddress] = useState("");
     const [paymentMethod, setPaymentMethod] = useState("cash_on_delivery");
     const [specialRequirements, setSpecialRequirements] = useState("");
+    const [walletBalance, setWalletBalance] = useState<number | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            const { wallet } = await getWallet();
+            if (!cancelled) setWalletBalance(wallet?.balance ?? 0);
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const isCartCheckout = !!items && items.length > 0;
 
@@ -63,6 +77,98 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
         setError(null);
 
         const now = new Date().toISOString();
+
+        if (paymentMethod === "wallet") {
+            if (walletBalance === null || walletBalance < totalPrice) {
+                setError(
+                    `Insufficient wallet balance. Available ₹${(walletBalance ?? 0).toLocaleString("en-IN")} • Required ₹${totalPrice.toLocaleString("en-IN")}`
+                );
+                setSubmitting(false);
+                return;
+            }
+        }
+
+        if (paymentMethod === "online_payment") {
+            try {
+                const lineItems = isCartCheckout
+                    ? items!.map((item) => ({
+                        name: item.name || item.product?.name || "Item",
+                        unit_amount: Math.round(
+                            parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * 118
+                        ),
+                        quantity: item.quantity,
+                    }))
+                    : product
+                        ? [{
+                            name: product.name,
+                            unit_amount: Math.round(parseFloat(product.price_per_unit) * 118),
+                            quantity,
+                        }]
+                        : [];
+
+                const res = await fetch("/api/stripe/checkout", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ items: lineItems }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.url) {
+                    throw new Error(data.error || "Failed to start payment");
+                }
+
+                const pendingPayload = isCartCheckout
+                    ? {
+                        type: "cart" as const,
+                        shippingAddress,
+                        specialRequirements,
+                        items: items!.map((item) => ({
+                            product_id: item.product_id || item.id,
+                            supplier_id: item.supplier_id || item.product?.supplier_id,
+                            quantity: item.quantity,
+                            unit_price: parseFloat(item.price_per_unit || item.product?.price_per_unit || "0"),
+                            total_price: parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * item.quantity,
+                            product_snapshot: {
+                                name: item.name || item.product?.name,
+                                category: item.category || item.product?.category,
+                                description: item.description || item.product?.description,
+                                image_urls: item.image_urls || item.product?.image_urls,
+                                origin_country: item.origin_country || item.product?.origin_country,
+                                unit_type: item.unit_type || item.product?.unit_type,
+                            },
+                        })),
+                    }
+                    : product
+                        ? {
+                            type: "product" as const,
+                            shippingAddress,
+                            specialRequirements,
+                            quantity,
+                            product: {
+                                id: product.id,
+                                supplier_id: product.supplier_id,
+                                price_per_unit: product.price_per_unit,
+                                name: product.name,
+                                category: product.category,
+                                description: product.description,
+                                image_urls: product.image_urls,
+                                origin_country: product.origin_country,
+                                unit_type: product.unit_type,
+                            },
+                        }
+                        : null;
+
+                if (pendingPayload) {
+                    sessionStorage.setItem(`pending_order_${data.id}`, JSON.stringify(pendingPayload));
+                }
+
+                window.location.href = data.url;
+                return;
+            } catch (err: any) {
+                setError(err?.message || "Could not start online payment");
+                setSubmitting(false);
+                return;
+            }
+        }
 
         if (isCartCheckout) {
             const orderItems = items.map(item => ({
@@ -120,6 +226,18 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
 
             if (submitError) {
                 setError(submitError);
+                setSubmitting(false);
+                return;
+            }
+        }
+
+        if (paymentMethod === "wallet") {
+            const desc = isCartCheckout
+                ? `Order payment (${items!.length} item${items!.length > 1 ? "s" : ""})`
+                : `Order payment: ${product?.name ?? "item"}`;
+            const { error: debitError } = await debitWallet(totalPrice, desc);
+            if (debitError) {
+                setError(`Order placed but wallet debit failed: ${debitError}. Please contact support.`);
                 setSubmitting(false);
                 return;
             }
@@ -340,10 +458,47 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                                                 Online Payment
                                             </p>
                                             <p className="text-sm text-gray-500">
-                                                Pay securely online{" "}
-                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full font-medium">
-                                                    Coming Soon
+                                                Pay securely with card via Stripe{" "}
+                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs rounded-full font-medium">
+                                                    Test Mode
                                                 </span>
+                                            </p>
+                                        </div>
+                                    </label>
+
+                                    <label
+                                        className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${paymentMethod === "wallet"
+                                            ? "border-[#EA7B7B] bg-[#EA7B7B]/5"
+                                            : "border-gray-200 hover:border-gray-300"
+                                            } ${walletBalance !== null && walletBalance < totalPrice ? "opacity-60" : "cursor-pointer"}`}
+                                    >
+                                        <input
+                                            type="radio"
+                                            name="payment"
+                                            value="wallet"
+                                            checked={paymentMethod === "wallet"}
+                                            onChange={(e) => setPaymentMethod(e.target.value)}
+                                            disabled={walletBalance !== null && walletBalance < totalPrice}
+                                            className="w-4 h-4 text-[#EA7B7B] focus:ring-[#EA7B7B]"
+                                        />
+                                        <Wallet className="w-5 h-5 text-[#EA7B7B]" />
+                                        <div className="flex-1">
+                                            <p className="font-medium text-gray-900">
+                                                Pay from Wallet
+                                            </p>
+                                            <p className="text-sm text-gray-500">
+                                                Balance:{" "}
+                                                <span className="font-semibold text-gray-900">
+                                                    ₹{(walletBalance ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                                                </span>
+                                                {walletBalance !== null && walletBalance < totalPrice && (
+                                                    <span className="ml-2 text-amber-600">
+                                                        — insufficient,{" "}
+                                                        <a href="/dashboard/wallet" className="underline">
+                                                            top up
+                                                        </a>
+                                                    </span>
+                                                )}
                                             </p>
                                         </div>
                                     </label>
@@ -400,7 +555,9 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                                         <span className="font-medium text-gray-900">
                                             {paymentMethod === "cash_on_delivery"
                                                 ? "COD"
-                                                : "Online"}
+                                                : paymentMethod === "wallet"
+                                                    ? "Wallet"
+                                                    : "Online"}
                                         </span>
                                     </div>
 
@@ -427,25 +584,38 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
 
                                 <button
                                     type="submit"
-                                    disabled={submitting || paymentMethod === "online_payment"}
+                                    disabled={submitting}
                                     className="w-full mt-6 py-3.5 bg-[#EA7B7B] text-white rounded-xl font-semibold hover:bg-[#d96a6a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                 >
                                     {submitting ? (
                                         <>
                                             <Loader2 className="w-5 h-5 animate-spin" />
-                                            Placing Order...
+                                            {paymentMethod === "online_payment"
+                                                ? "Redirecting to Stripe..."
+                                                : paymentMethod === "wallet"
+                                                    ? "Charging Wallet..."
+                                                    : "Placing Order..."}
                                         </>
                                     ) : (
                                         <>
                                             <CheckCircle2 className="w-5 h-5" />
-                                            Confirm Order
+                                            {paymentMethod === "online_payment"
+                                                ? "Pay with Stripe"
+                                                : paymentMethod === "wallet"
+                                                    ? "Pay from Wallet"
+                                                    : "Confirm Order"}
                                         </>
                                     )}
                                 </button>
 
                                 {paymentMethod === "online_payment" && (
-                                    <p className="text-xs text-amber-600 text-center mt-3">
-                                        Online payment is currently being set up. Please select Cash on Delivery.
+                                    <p className="text-xs text-gray-500 text-center mt-3">
+                                        Use test card 4242 4242 4242 4242 with any future expiry and CVC.
+                                    </p>
+                                )}
+                                {paymentMethod === "wallet" && walletBalance !== null && walletBalance >= totalPrice && (
+                                    <p className="text-xs text-gray-500 text-center mt-3">
+                                        ₹{totalPrice.toLocaleString("en-IN")} will be debited from your wallet.
                                     </p>
                                 )}
                             </div>

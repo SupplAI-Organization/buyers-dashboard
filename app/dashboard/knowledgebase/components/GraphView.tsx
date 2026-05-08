@@ -111,6 +111,18 @@ export default function GraphView({ nodes, edges, selectedId, onNodeClick }: Pro
           } as any,
         },
         {
+          selector: 'node[kind = "chat"]',
+          style: {
+            "background-color": "#f472b6", // pink — distinct from sellers/products/categories
+            shape: "round-rectangle",
+            "font-weight": 600,
+            "font-size": 9,
+            width: "mapData(weight, 1, 10, 10, 22)",
+            height: "mapData(weight, 1, 10, 10, 22)",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+        },
+        {
           selector: "node.is-hover",
           style: { "text-opacity": 1, color: "#f1f5f9" },
         },

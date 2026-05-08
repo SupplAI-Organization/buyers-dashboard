@@ -13,6 +13,7 @@ import {
   LogOut,
   Sparkles,
   Network,
+  Wallet,
 } from "lucide-react";
 import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
@@ -23,6 +24,7 @@ const menuItems = [
   { icon: Sparkles, label: "Assistant", href: "/dashboard/agent" },
   { icon: Network, label: "Knowledge Base", href: "/dashboard/knowledgebase" },
   { icon: ShoppingCart, label: "Orders", href: "/dashboard/orders" },
+  { icon: Wallet, label: "Wallet", href: "/dashboard/wallet" },
   { icon: Heart, label: "Wishlist", href: "/dashboard/wishlist" },
   { icon: ClipboardList, label: "Quotes", href: "/dashboard/quotes" },
 ];

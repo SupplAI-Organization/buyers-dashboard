@@ -107,10 +107,50 @@ export async function POST(request: Request) {
     }
   }
 
+  // Persist incoming user messages BEFORE the LLM call, so a failed/interrupted
+  // stream still leaves a record. onFinish handles assistant messages later.
+  try {
+    const baseTs = Date.now();
+    const userRows = messages
+      .filter((m) => m.role === "user")
+      .map((m, i) => ({
+        id: m.id,
+        conversation_id: conversationId,
+        role: m.role,
+        parts: m.parts,
+        created_at: new Date(baseTs + i).toISOString(),
+      }));
+    if (userRows.length) {
+      const { error: uErr } = await supabase
+        .from("agent_messages")
+        .upsert(userRows, { onConflict: "id", ignoreDuplicates: true });
+      if (uErr) console.error("[api/agent] save user messages FAILED:", uErr.message);
+    }
+  } catch (e) {
+    console.error("[api/agent] persist-user error:", e);
+  }
+
+  // Strip any tool parts that never reached output-available/output-error.
+  // A stream interrupted mid-tool leaves an assistant message with a
+  // tool-call part that has no matching tool-result, which makes
+  // convertToModelMessages throw AI_MissingToolResultsError on the next turn.
+  const sanitizedMessages = messages.map((m) => {
+    if (!Array.isArray(m.parts)) return m;
+    const parts = m.parts.filter((p) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const part = p as any;
+      if (typeof part?.type === "string" && part.type.startsWith("tool-")) {
+        return part.state === "output-available" || part.state === "output-error";
+      }
+      return true;
+    });
+    return { ...m, parts };
+  });
+
   const result = streamText({
     model: google("gemini-2.5-flash"),
     system: SYSTEM_PROMPT,
-    messages: await convertToModelMessages(messages),
+    messages: await convertToModelMessages(sanitizedMessages),
     stopWhen: stepCountIs(6),
     tools: {
       searchSellers: tool({
@@ -972,24 +1012,65 @@ export async function POST(request: Request) {
 
   return result.toUIMessageStreamResponse({
     originalMessages: messages,
+    // Assign a real ID to every newly-generated assistant message. Without
+    // this, the SDK leaves m.id as an empty string, which collides on upsert
+    // and silently drops the row (we saw this in `[api/agent] onFinish` logs:
+    // `assistant#` with no id).
+    generateMessageId: () => crypto.randomUUID(),
     onFinish: async ({ messages: finalMessages }) => {
       // Upsert every message in the conversation by id (idempotent on retries).
+      // We assign each row a per-index created_at so ordering by created_at on
+      // load preserves the original send order (the column's default now() ties
+      // all rows in a single insert, which loses the user→assistant order).
+      // ignoreDuplicates keeps each message's original timestamp once written.
       try {
-        const rows = finalMessages.map((m) => ({
-          id: m.id,
-          conversation_id: conversationId,
-          role: m.role,
-          parts: m.parts,
-        }));
-        const { error: upErr } = await supabase
+        const base = Date.now();
+        const ALLOWED_ROLES = new Set(["user", "assistant", "system"]);
+        const rows = finalMessages
+          .filter((m) => ALLOWED_ROLES.has(m.role))
+          .map((m, i) => ({
+            id: m.id,
+            conversation_id: conversationId,
+            role: m.role,
+            parts: m.parts,
+            created_at: new Date(base + i).toISOString(),
+          }));
+        const dropped = finalMessages.length - rows.length;
+        if (dropped > 0) {
+          console.warn(
+            `[api/agent] dropped ${dropped} messages with non-standard roles:`,
+            finalMessages
+              .filter((m) => !ALLOWED_ROLES.has(m.role))
+              .map((m) => m.role),
+          );
+        }
+        console.log(
+          `[api/agent] onFinish: ${rows.length} messages →`,
+          rows.map((r) => `${r.role}#${r.id.slice(0, 8)}`).join(", "),
+        );
+        const { data: saved, error: upErr } = await supabase
           .from("agent_messages")
-          .upsert(rows, { onConflict: "id" });
-        if (upErr) console.error("[api/agent] save messages:", upErr.message);
+          .upsert(rows, { onConflict: "id", ignoreDuplicates: true })
+          .select("id");
+        if (upErr) {
+          console.error(
+            "[api/agent] save messages FAILED:",
+            upErr.message,
+            upErr.details,
+            upErr.hint,
+            "— if the error mentions 'invalid input syntax for type uuid', run: alter table public.agent_messages alter column id type text;",
+          );
+        } else {
+          console.log(
+            `[api/agent] saved ${saved?.length ?? 0}/${rows.length} messages (skipped existing)`,
+          );
+        }
 
-        await supabase
+        const { error: tErr } = await supabase
           .from("agent_conversations")
           .update({ updated_at: new Date().toISOString() })
           .eq("id", conversationId);
+        if (tErr) console.error("[api/agent] touch conversation FAILED:", tErr.message);
       } catch (e) {
         console.error("[api/agent] persistence error:", e);
       }

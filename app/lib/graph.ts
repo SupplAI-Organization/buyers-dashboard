@@ -4,7 +4,7 @@ import path from "path";
 // A node belongs to exactly one of these kinds. The renderer reads `kind`
 // to decide colour/size, and the drawer reads it to decide which template
 // to render.
-export type GraphNodeKind = "concept" | "seller" | "product" | "category";
+export type GraphNodeKind = "concept" | "seller" | "product" | "category" | "chat";
 
 export type GraphNode = {
   id: string;
@@ -60,7 +60,23 @@ export type CategoryDetail = {
   seller_count: number;
 };
 
-export type GraphDetail = ConceptDetail | SellerDetail | ProductDetail | CategoryDetail;
+export type ChatDetail = {
+  kind: "chat";
+  id: string;
+  conversationId: string;
+  title: string;
+  updated_at: string;
+  message_count: number;
+  product_links: number;
+  seller_links: number;
+};
+
+export type GraphDetail =
+  | ConceptDetail
+  | SellerDetail
+  | ProductDetail
+  | CategoryDetail
+  | ChatDetail;
 
 export type GraphData = {
   nodes: GraphNode[];
