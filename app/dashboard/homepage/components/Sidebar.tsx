@@ -11,6 +11,8 @@ import {
   Settings,
   HelpCircle,
   LogOut,
+  Sparkles,
+  Network,
 } from "lucide-react";
 import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
@@ -18,6 +20,8 @@ import { useRouter } from "next/navigation";
 
 const menuItems = [
   { icon: Home, label: "Home", href: "/dashboard/homepage2" },
+  { icon: Sparkles, label: "Assistant", href: "/dashboard/agent" },
+  { icon: Network, label: "Knowledge Base", href: "/dashboard/knowledgebase" },
   { icon: ShoppingCart, label: "Orders", href: "/dashboard/orders" },
   { icon: Heart, label: "Wishlist", href: "/dashboard/wishlist" },
   { icon: ClipboardList, label: "Quotes", href: "/dashboard/quotes" },
