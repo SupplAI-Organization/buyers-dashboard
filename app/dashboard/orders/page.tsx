@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Order } from "@/lib/order";
@@ -15,22 +15,44 @@ export default function OrdersPage() {
     const [orders, setOrders] = useState<Order[]>([]);
     const [loading, setLoading] = useState(true);
 
+    const refresh = useCallback(async () => {
+        const ordersData = await fetchOrders();
+        setOrders(ordersData);
+    }, []);
+
     useEffect(() => {
+        let cancelled = false;
+
         const init = async () => {
             const { data: userData } = await supabase.auth.getUser();
             if (!userData.user) {
                 router.replace("/login");
                 return;
             }
+            if (cancelled) return;
             setUser(userData.user);
-
-            const ordersData = await fetchOrders();
-            setOrders(ordersData);
-            setLoading(false);
+            await refresh();
+            if (!cancelled) setLoading(false);
         };
 
         init();
-    }, [router]);
+
+        const onFocus = () => {
+            refresh();
+        };
+        const onVisibility = () => {
+            if (document.visibilityState === "visible") refresh();
+        };
+
+        window.addEventListener("focus", onFocus);
+        document.addEventListener("visibilitychange", onVisibility);
+
+        return () => {
+            cancelled = true;
+            window.removeEventListener("focus", onFocus);
+            document.removeEventListener("visibilitychange", onVisibility);
+        };
+    }, [router, refresh]);
 
     if (!user) return null;
 

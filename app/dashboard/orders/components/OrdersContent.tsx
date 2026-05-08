@@ -34,6 +34,9 @@ const statusConfig: Record<string, { label: string; color: string; bg: string; i
 const paymentStatusConfig: Record<string, { label: string; color: string }> = {
     pending: { label: "Pending", color: "text-amber-600" },
     paid: { label: "Paid", color: "text-green-600" },
+    completed: { label: "Paid", color: "text-green-600" },
+    partial: { label: "Partial", color: "text-amber-600" },
+    refunded: { label: "Refunded", color: "text-blue-600" },
     failed: { label: "Failed", color: "text-red-600" },
 };
 
@@ -236,7 +239,7 @@ export default function OrdersContent({ orders, loading }: OrdersContentProps) {
                                                                     : order.payment_method || "—"}
                                                         </p>
                                                         <div className="flex items-center gap-1.5 mt-1">
-                                                            <span className={`w-1.5 h-1.5 rounded-full ${order.payment_status === 'paid' ? 'bg-green-500' : 'bg-amber-500'
+                                                            <span className={`w-1.5 h-1.5 rounded-full ${(order.payment_status === 'paid' || order.payment_status === 'completed') ? 'bg-green-500' : order.payment_status === 'failed' ? 'bg-red-500' : 'bg-amber-500'
                                                                 }`} />
                                                             <p className={`text-xs font-bold ${paymentSt.color} uppercase tracking-tight`}>
                                                                 {paymentSt.label}

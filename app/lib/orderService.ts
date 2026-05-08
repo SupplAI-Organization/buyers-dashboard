@@ -51,7 +51,7 @@ export async function createOrderItem(
         order_date: data.date_time,
         special_requirments: data.special_requirments,
         status: "pending",
-        payment_status: "pending",
+        payment_status: data.payment_method === "cash_on_delivery" ? "pending" : "completed",
     };
     console.log("Inserting order with payload:", JSON.stringify(insertPayload, null, 2));
 
@@ -140,7 +140,7 @@ export async function createOrderWithItems(
         order_date: orderData.date_time,
         special_requirments: orderData.special_requirments || "",
         status: "pending",
-        payment_status: "pending",
+        payment_status: orderData.payment_method === "cash_on_delivery" ? "pending" : "completed",
     };
 
     const { data: createdOrder, error: orderError } = await supabase

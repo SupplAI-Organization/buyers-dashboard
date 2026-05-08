@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, Loader2, AlertCircle } from "lucide-react";
 import { createOrderItem, createOrderWithItems } from "@/lib/orderService";
@@ -38,6 +38,25 @@ type PendingPayload =
     };
 
 export default function CheckoutSuccessPage() {
+    return (
+        <Suspense fallback={<SuccessFallback />}>
+            <CheckoutSuccessInner />
+        </Suspense>
+    );
+}
+
+function SuccessFallback() {
+    return (
+        <div className="ml-20 pt-4 flex items-center justify-center min-h-[80vh]">
+            <div className="flex flex-col items-center bg-white rounded-2xl p-10 shadow-sm border border-gray-100 max-w-md mx-auto text-center">
+                <Loader2 className="w-12 h-12 text-[#EA7B7B] animate-spin mb-6" />
+                <h2 className="text-xl font-semibold text-gray-900">Loading...</h2>
+            </div>
+        </div>
+    );
+}
+
+function CheckoutSuccessInner() {
     const router = useRouter();
     const params = useSearchParams();
     const sessionId = params.get("session_id");
