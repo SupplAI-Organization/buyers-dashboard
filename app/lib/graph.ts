@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { composeEdgeWeights } from "./graphWeights";
 
 // A node belongs to exactly one of these kinds. The renderer reads `kind`
 // to decide colour/size, and the drawer reads it to decide which template
@@ -14,7 +15,15 @@ export type GraphNode = {
   weight?: number;
 };
 
-export type GraphEdge = { id: string; source: string; target: string };
+export type GraphEdge = {
+  id: string;
+  source: string;
+  target: string;
+  /** Composite weight (post-composer). Drives line width / opacity. */
+  weight: number;
+  /** Original domain signal (link count, mention count, etc.). Drives the hover label. */
+  rawWeight?: number;
+};
 
 // ── Detail shapes per node kind ──────────────────────────────────────────────
 
@@ -122,8 +131,10 @@ export async function loadGraph(): Promise<GraphData> {
     nodes.push({ id, label: title, kind: "concept" });
   }
 
-  const seenPairs = new Set<string>();
-  const edges: GraphEdge[] = [];
+  // Count occurrences per undirected pair so an edge's weight reflects how
+  // many [[wiki-links]] connect the two notes — used by the renderer's
+  // attention mapping (thicker line = stronger conceptual link).
+  const pairCounts = new Map<string, { source: string; target: string; count: number }>();
 
   for (const filename of mdFiles) {
     const sourceId = idFromFilename(filename);
@@ -135,13 +146,28 @@ export async function loadGraph(): Promise<GraphData> {
       if (!targetId || targetId === sourceId) continue;
       if (!details[targetId]) continue;
 
-      const pair = [sourceId, targetId].sort().join("|");
-      if (seenPairs.has(pair)) continue;
-      seenPairs.add(pair);
-
-      edges.push({ id: `e-${pair}`, source: sourceId, target: targetId });
+      const [a, b] = [sourceId, targetId].sort();
+      const pair = `${a}|${b}`;
+      const existing = pairCounts.get(pair);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        pairCounts.set(pair, { source: a, target: b, count: 1 });
+      }
     }
   }
 
-  return { nodes, edges, details };
+  const edges: GraphEdge[] = Array.from(pairCounts.entries()).map(
+    ([pair, { source, target, count }]) => ({
+      id: `e-${pair}`,
+      source,
+      target,
+      weight: count,
+    }),
+  );
+
+  const conceptIds = new Set(nodes.filter((n) => n.kind === "concept").map((n) => n.id));
+  const weighted = composeEdgeWeights(edges, { nodes }, { conceptIds });
+
+  return { nodes, edges: weighted, details };
 }

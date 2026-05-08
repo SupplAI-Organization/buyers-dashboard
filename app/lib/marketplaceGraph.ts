@@ -5,6 +5,7 @@ import type {
   GraphEdge,
   GraphNode,
 } from "./graph";
+import { composeEdgeWeights } from "./graphWeights";
 
 const SELLER_PREFIX = "seller-";
 const PRODUCT_PREFIX = "product-";
@@ -31,6 +32,7 @@ type RawProduct = {
   origin_country: string | null;
   origin_state: string | null;
   supplier_id: string;
+  updated_at: string | null;
 };
 
 /**
@@ -53,7 +55,7 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
       supabase
         .from("products")
         .select(
-          "id, name, category, price_per_unit, unit_type, available_quantity, min_order_quantity, certification, origin_country, origin_state, supplier_id",
+          "id, name, category, price_per_unit, unit_type, available_quantity, min_order_quantity, certification, origin_country, origin_state, supplier_id, updated_at",
         )
         .eq("is_listed", true),
     ]);
@@ -72,6 +74,11 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
   const sellerCategories = new Map<string, Set<string>>();
   const categoryProductCount = new Map<string, number>();
   const categorySellers = new Map<string, Set<string>>();
+  // Distinct sellers carrying each product name (case-insensitive). Drives
+  // the seller→product edge weight: a commodity many sellers list shows
+  // thick edges across all its listings; a unique product stays thin.
+  const sellersByProductName = new Map<string, Set<string>>();
+  const normalizeName = (n: string) => n.trim().toLowerCase();
 
   for (const p of products) {
     sellerListingCount.set(p.supplier_id, (sellerListingCount.get(p.supplier_id) ?? 0) + 1);
@@ -82,11 +89,48 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
     categoryProductCount.set(p.category, (categoryProductCount.get(p.category) ?? 0) + 1);
     if (!categorySellers.has(p.category)) categorySellers.set(p.category, new Set());
     categorySellers.get(p.category)!.add(p.supplier_id);
+
+    const key = normalizeName(p.name);
+    if (!sellersByProductName.has(key)) sellersByProductName.set(key, new Set());
+    sellersByProductName.get(key)!.add(p.supplier_id);
   }
 
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const details: Record<string, GraphDetail> = {};
+
+  // ── Composer context ──────────────────────────────────────────────────────
+  // Per-product-name median price feeds the price-competitiveness factor.
+  const pricesByName = new Map<string, number[]>();
+  for (const p of products) {
+    const key = normalizeName(p.name);
+    const price = parseFloat(p.price_per_unit);
+    if (Number.isFinite(price) && price > 0) {
+      if (!pricesByName.has(key)) pricesByName.set(key, []);
+      pricesByName.get(key)!.push(price);
+    }
+  }
+  const medianPrice = new Map<string, number>();
+  for (const [name, list] of pricesByName) {
+    list.sort((a, b) => a - b);
+    medianPrice.set(name, list[Math.floor(list.length / 2)]);
+  }
+
+  const verifiedSellerIds = new Set<string>();
+  for (const s of sellers) {
+    if (s.is_verified) verifiedSellerIds.add(`${SELLER_PREFIX}${s.id}`);
+  }
+  const certifiedProductIds = new Set<string>();
+  const priceMultiplierByEdge = new Map<string, number>();
+  const toolMultiplierByEdge = new Map<string, number>();
+  const edgeAgeDays = new Map<string, number>();
+  const now = Date.now();
+  const ageInDays = (iso: string | null | undefined): number | null => {
+    if (!iso) return null;
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return null;
+    return Math.max(0, (now - t) / (1000 * 60 * 60 * 24));
+  };
 
   // Only include sellers that actually have at least one listed product —
   // otherwise the graph fills with disconnected dots.
@@ -123,7 +167,8 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
     const sellerId = `${SELLER_PREFIX}${p.supplier_id}`;
     if (!details[sellerId]) continue; // guard against orphan products
 
-    nodes.push({ id, label: p.name, kind: "product", weight: 1 });
+    const competingSellers = sellersByProductName.get(normalizeName(p.name))?.size ?? 1;
+    nodes.push({ id, label: p.name, kind: "product", weight: competingSellers });
     details[id] = {
       kind: "product",
       id,
@@ -138,7 +183,26 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
       certification: p.certification,
       origin: [p.origin_state, p.origin_country].filter(Boolean).join(", ") || null,
     };
-    edges.push({ id: `e-${sellerId}-${id}`, source: sellerId, target: id });
+    const edgeId = `e-${sellerId}-${id}`;
+    edges.push({
+      id: edgeId,
+      source: sellerId,
+      target: id,
+      weight: competingSellers,
+    });
+
+    // Phase B context: cheaper-than-peers ⇒ thicker (clamped 0.5–2.0).
+    const price = parseFloat(p.price_per_unit);
+    const median = medianPrice.get(normalizeName(p.name));
+    if (Number.isFinite(price) && price > 0 && median && median > 0) {
+      const mult = Math.max(0.5, Math.min(2.0, median / price));
+      priceMultiplierByEdge.set(edgeId, mult);
+    }
+    if (p.certification && p.certification.trim()) {
+      certifiedProductIds.add(id);
+    }
+    const age = ageInDays(p.updated_at);
+    if (age !== null) edgeAgeDays.set(edgeId, age);
   }
 
   // ── Category nodes + product→category edges ─────────────────────────────
@@ -158,7 +222,12 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
     const productId = `${PRODUCT_PREFIX}${p.id}`;
     const categoryId = `${CATEGORY_PREFIX}${p.category}`;
     if (!details[productId] || !details[categoryId]) continue;
-    edges.push({ id: `e-${productId}-${categoryId}`, source: productId, target: categoryId });
+    edges.push({
+      id: `e-${productId}-${categoryId}`,
+      source: productId,
+      target: categoryId,
+      weight: 1,
+    });
   }
 
   // ── Chat nodes (current user's saved conversations) ────────────────────────
@@ -189,23 +258,30 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
       const cid = c.id as string;
       const chatNodeId = `${CHAT_PREFIX}${cid}`;
       const allParts = (partsByConv.get(cid) ?? []).flat();
-      const { productIds, sellerIds } = extractMarketplaceRefs(allParts);
+      const { productCounts, sellerCounts } = extractMarketplaceRefs(allParts);
 
-      const linkedProducts = [...productIds].filter(
-        (id) => details[`${PRODUCT_PREFIX}${id}`],
+      const linkedProducts = [...productCounts.entries()].filter(
+        ([id]) => details[`${PRODUCT_PREFIX}${id}`],
       );
-      const linkedSellers = [...sellerIds].filter(
-        (id) => details[`${SELLER_PREFIX}${id}`],
+      const linkedSellers = [...sellerCounts.entries()].filter(
+        ([id]) => details[`${SELLER_PREFIX}${id}`],
       );
 
       const messageCount = (partsByConv.get(cid) ?? []).length;
       // Skip only truly empty chats (no messages saved at all).
       if (messageCount === 0) continue;
+
+      // Sum mention counts so the chat-node size scales with how much it
+      // actually talked about marketplace entities, not just distinct count.
+      const totalMentions =
+        linkedProducts.reduce((s, [, r]) => s + r.count, 0) +
+        linkedSellers.reduce((s, [, r]) => s + r.count, 0);
+
       nodes.push({
         id: chatNodeId,
         label: (c.title as string) || "Untitled chat",
         kind: "chat",
-        weight: linkedProducts.length + linkedSellers.length,
+        weight: totalMentions || linkedProducts.length + linkedSellers.length,
       });
       details[chatNodeId] = {
         kind: "chat",
@@ -218,24 +294,46 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
         seller_links: linkedSellers.length,
       };
 
-      for (const pid of linkedProducts) {
+      const chatAge = ageInDays(c.updated_at as string);
+      for (const [pid, ref] of linkedProducts) {
+        const eid = `e-${chatNodeId}-${PRODUCT_PREFIX}${pid}`;
         edges.push({
-          id: `e-${chatNodeId}-${PRODUCT_PREFIX}${pid}`,
+          id: eid,
           source: chatNodeId,
           target: `${PRODUCT_PREFIX}${pid}`,
+          weight: ref.count,
         });
+        toolMultiplierByEdge.set(eid, Math.max(1, ref.weighted / Math.max(ref.count, 1)));
+        if (chatAge !== null) edgeAgeDays.set(eid, chatAge);
       }
-      for (const sid of linkedSellers) {
+      for (const [sid, ref] of linkedSellers) {
+        const eid = `e-${chatNodeId}-${SELLER_PREFIX}${sid}`;
         edges.push({
-          id: `e-${chatNodeId}-${SELLER_PREFIX}${sid}`,
+          id: eid,
           source: chatNodeId,
           target: `${SELLER_PREFIX}${sid}`,
+          weight: ref.count,
         });
+        toolMultiplierByEdge.set(eid, Math.max(1, ref.weighted / Math.max(ref.count, 1)));
+        if (chatAge !== null) edgeAgeDays.set(eid, chatAge);
       }
     }
   }
 
-  return { nodes, edges, details };
+  const weighted = composeEdgeWeights(
+    edges,
+    {
+      nodes,
+      verifiedSellerIds,
+      certifiedProductIds,
+      priceMultiplierByEdge,
+      toolMultiplierByEdge,
+      edgeAgeDays,
+    },
+    {},
+  );
+
+  return { nodes, edges: weighted, details };
 }
 
 // Walk a message's `parts` array and pull out any product or seller UUIDs
@@ -246,12 +344,44 @@ export async function loadMarketplaceGraph(): Promise<GraphData> {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Buyer-intent weights per tool class. Cart actions reflect strongest intent;
+// detail views are mid-strength research; bulk searches are exploratory.
+const TOOL_INTENT_WEIGHT: Record<string, number> = {
+  addToCart: 3,
+  updateCartItemQuantity: 3,
+  getProductDetails: 2,
+  getSellerDetails: 2,
+  compareSellers: 2,
+  searchProducts: 1,
+  searchSellers: 1,
+  viewCart: 1,
+  removeFromCart: 1,
+};
+
+type RefCount = { count: number; weighted: number };
+
 function extractMarketplaceRefs(parts: unknown[]): {
-  productIds: Set<string>;
-  sellerIds: Set<string>;
+  productCounts: Map<string, RefCount>;
+  sellerCounts: Map<string, RefCount>;
 } {
-  const productIds = new Set<string>();
-  const sellerIds = new Set<string>();
+  const productCounts = new Map<string, RefCount>();
+  const sellerCounts = new Map<string, RefCount>();
+
+  const bump = (
+    map: Map<string, RefCount>,
+    id: unknown,
+    intent: number,
+  ) => {
+    if (typeof id !== "string" || !UUID_RE.test(id)) return;
+    const cur = map.get(id) ?? { count: 0, weighted: 0 };
+    cur.count += 1;
+    cur.weighted += intent;
+    map.set(id, cur);
+  };
+
+  let currentIntent = 1;
+  const bumpProduct = (id: unknown) => bump(productCounts, id, currentIntent);
+  const bumpSeller = (id: unknown) => bump(sellerCounts, id, currentIntent);
 
   for (const part of parts) {
     if (!part || typeof part !== "object") continue;
@@ -262,66 +392,55 @@ function extractMarketplaceRefs(parts: unknown[]): {
     const toolName = type.slice("tool-".length);
     const output = p.output as Record<string, unknown> | undefined;
     const input = p.input as Record<string, unknown> | undefined;
+    currentIntent = TOOL_INTENT_WEIGHT[toolName] ?? 1;
 
     // ── product-yielding tools ────────────────────────────────────────────
     if (toolName === "searchProducts" && output?.products) {
       for (const row of output.products as Record<string, unknown>[]) {
-        const id = row?.id;
-        if (typeof id === "string" && UUID_RE.test(id)) productIds.add(id);
-        const sid = row?.seller_id ?? row?.supplier_id;
-        if (typeof sid === "string" && UUID_RE.test(sid)) sellerIds.add(sid);
+        bumpProduct(row?.id);
+        bumpSeller(row?.seller_id ?? row?.supplier_id);
       }
     }
     if (toolName === "getProductDetails") {
       const prod = output?.product as Record<string, unknown> | undefined;
       const sell = output?.seller as Record<string, unknown> | undefined;
-      const pid = prod?.id ?? input?.productId;
-      if (typeof pid === "string" && UUID_RE.test(pid)) productIds.add(pid);
-      const sid = sell?.id;
-      if (typeof sid === "string" && UUID_RE.test(sid)) sellerIds.add(sid);
+      bumpProduct(prod?.id ?? input?.productId);
+      bumpSeller(sell?.id);
     }
     if (toolName === "addToCart") {
       const prod = output?.product as Record<string, unknown> | undefined;
-      const pid = prod?.id ?? input?.productId;
-      if (typeof pid === "string" && UUID_RE.test(pid)) productIds.add(pid);
+      bumpProduct(prod?.id ?? input?.productId);
     }
     if (toolName === "updateCartItemQuantity" || toolName === "removeFromCart") {
       const prod = output?.product as Record<string, unknown> | undefined;
-      const pid = prod?.id;
-      if (typeof pid === "string" && UUID_RE.test(pid)) productIds.add(pid);
+      bumpProduct(prod?.id);
     }
     if (toolName === "viewCart" && output?.items) {
       for (const it of output.items as Record<string, unknown>[]) {
-        const pid = it?.product_id;
-        if (typeof pid === "string" && UUID_RE.test(pid)) productIds.add(pid);
+        bumpProduct(it?.product_id);
       }
     }
 
     // ── seller-yielding tools ─────────────────────────────────────────────
     if (toolName === "searchSellers" && output?.sellers) {
       for (const row of output.sellers as Record<string, unknown>[]) {
-        const id = row?.id;
-        if (typeof id === "string" && UUID_RE.test(id)) sellerIds.add(id);
+        bumpSeller(row?.id);
       }
     }
     if (toolName === "getSellerDetails") {
       const sell = output?.seller as Record<string, unknown> | undefined;
-      const sid = sell?.id ?? input?.sellerId;
-      if (typeof sid === "string" && UUID_RE.test(sid)) sellerIds.add(sid);
+      bumpSeller(sell?.id ?? input?.sellerId);
     }
     if (toolName === "compareSellers" && output?.sellers) {
       for (const row of output.sellers as Record<string, unknown>[]) {
-        const id = row?.id;
-        if (typeof id === "string" && UUID_RE.test(id)) sellerIds.add(id);
+        bumpSeller(row?.id);
       }
       const ids = input?.sellerIds;
       if (Array.isArray(ids)) {
-        for (const id of ids) {
-          if (typeof id === "string" && UUID_RE.test(id)) sellerIds.add(id);
-        }
+        for (const id of ids) bumpSeller(id);
       }
     }
   }
 
-  return { productIds, sellerIds };
+  return { productCounts, sellerCounts };
 }

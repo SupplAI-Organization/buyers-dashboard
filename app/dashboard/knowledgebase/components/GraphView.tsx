@@ -40,10 +40,23 @@ export default function GraphView({ nodes, edges, selectedId, onNodeClick }: Pro
     }));
     const edgeEls: ElementDefinition[] = edges.map((e) => ({
       group: "edges",
-      data: { id: e.id, source: e.source, target: e.target },
+      data: {
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        weight: e.weight ?? 1,
+        rawWeight: e.rawWeight ?? e.weight ?? 1,
+      },
     }));
     return [...nodeEls, ...edgeEls];
   }, [nodes, edges]);
+
+  // Domain of the edge-weight → visual mapping. A small floor avoids a
+  // collapsed mapData range when every edge has weight 1.
+  const maxEdgeWeight = useMemo(
+    () => Math.max(2, ...edges.map((e) => e.weight ?? 1)),
+    [edges],
+  );
 
   // Mount cytoscape once. Re-runs only if elements identity changes
   // (which we deliberately scope by key={mode} from the parent).
@@ -139,18 +152,38 @@ export default function GraphView({ nodes, edges, selectedId, onNodeClick }: Pro
         {
           selector: "edge",
           style: {
-            width: 0.6,
+            width: `mapData(weight, 1, ${maxEdgeWeight}, 0.5, 3.5)`,
+            opacity: `mapData(weight, 1, ${maxEdgeWeight}, 0.25, 0.85)`,
             "line-color": "#334155",
             "curve-style": "bezier",
             "target-arrow-shape": "none",
-            opacity: 0.5,
-          },
+            "font-size": 8,
+            color: "#cbd5e1",
+            "text-opacity": 0,
+            "text-background-color": "#0f172a",
+            "text-background-opacity": 0.7,
+            "text-background-padding": 2,
+            "text-rotation": "autorotate",
+            "transition-property": "line-color, opacity, width, text-opacity",
+            "transition-duration": 150,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
         },
         {
           selector: "edge.is-incident",
-          style: { "line-color": "#94a3b8", opacity: 1, width: 1 },
+          style: {
+            "line-color": "#94a3b8",
+            opacity: 1,
+            width: `mapData(weight, 1, ${maxEdgeWeight}, 1, 5)`,
+            label: "data(rawWeight)",
+            "text-opacity": 1,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
         },
-        { selector: "edge.is-dimmed", style: { opacity: 0.08 } },
+        {
+          selector: "edge.is-dimmed",
+          style: { opacity: 0.06, "text-opacity": 0 },
+        },
       ],
     });
 
@@ -226,7 +259,7 @@ export default function GraphView({ nodes, edges, selectedId, onNodeClick }: Pro
       }
       cyRef.current = null;
     };
-  }, [elements]);
+  }, [elements, maxEdgeWeight]);
 
   // Reflect external selectedId onto the graph (no remount needed)
   useEffect(() => {
