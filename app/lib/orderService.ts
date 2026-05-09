@@ -161,6 +161,7 @@ export async function createOrderWithItems(
         quantity: item.quantity,
         unit_price: item.unit_price,
         total_price: item.total_price,
+        discount_percentage: item.discount_percentage ?? 0,
         product_snapshot: item.product_snapshot,
         special_requirments: item.special_requirments || "",
         shipping_address: item.shipping_address,

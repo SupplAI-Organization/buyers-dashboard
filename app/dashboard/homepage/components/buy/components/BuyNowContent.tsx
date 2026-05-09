@@ -5,6 +5,11 @@ import { formatPrice } from "@/lib/productService";
 import { createOrderItem, createOrderWithItems } from "@/lib/orderService";
 import { getWallet, debitWallet } from "@/lib/walletService";
 import {
+    pickApplicableSlab,
+    pickNextSlab,
+    type DiscountSlab,
+} from "@/lib/discountSlabs";
+import {
     ArrowLeft,
     Loader2,
     Package,
@@ -61,8 +66,34 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
         return 0;
     }, [isCartCheckout, items, product, quantity]);
 
-    const tax = subtotal * 0.18;
-    const totalPrice = subtotal + tax;
+    const agentDiscount = useMemo(() => {
+        if (!isCartCheckout) return 0;
+        return items!.reduce((sum, item) => {
+            const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+            const pct = Number(item.discount_percentage) || 0;
+            return sum + price * item.quantity * (pct / 100);
+        }, 0);
+    }, [isCartCheckout, items]);
+
+    const volumeDiscount = useMemo(() => {
+        if (!isCartCheckout) return 0;
+        return items!.reduce((sum, item) => {
+            const slabs: DiscountSlab[] | undefined = item.discount_slabs;
+            const slab = pickApplicableSlab(slabs, item.quantity);
+            if (!slab) return sum;
+            const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+            const agentPct = Number(item.discount_percentage) || 0;
+            // Slab applies on top of the agent-discounted unit price so the
+            // two stack additively in money terms (matches how it's persisted
+            // to order_items below).
+            const afterAgent = price * (1 - agentPct / 100);
+            return sum + afterAgent * item.quantity * (slab.discount_percentage / 100);
+        }, 0);
+    }, [isCartCheckout, items]);
+
+    const discountedSubtotal = subtotal - agentDiscount - volumeDiscount;
+    const tax = discountedSubtotal * 0.18;
+    const totalPrice = discountedSubtotal + tax;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -91,13 +122,22 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
         if (paymentMethod === "online_payment") {
             try {
                 const lineItems = isCartCheckout
-                    ? items!.map((item) => ({
-                        name: item.name || item.product?.name || "Item",
-                        unit_amount: Math.round(
-                            parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * 118
-                        ),
-                        quantity: item.quantity,
-                    }))
+                    ? items!.map((item) => {
+                        const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+                        const agentPct = Number(item.discount_percentage) || 0;
+                        const slab = pickApplicableSlab(item.discount_slabs, item.quantity);
+                        const slabPct = slab?.discount_percentage ?? 0;
+                        const discountedUnit = price * (1 - agentPct / 100) * (1 - slabPct / 100);
+                        const baseName = item.name || item.product?.name || "Item";
+                        const tags: string[] = [];
+                        if (agentPct > 0) tags.push(`Agent −${agentPct}%`);
+                        if (slabPct > 0) tags.push(`Volume −${slabPct}%`);
+                        return {
+                            name: tags.length ? `${baseName} (${tags.join(", ")})` : baseName,
+                            unit_amount: Math.round(discountedUnit * 118),
+                            quantity: item.quantity,
+                        };
+                    })
                     : product
                         ? [{
                             name: product.name,
@@ -121,12 +161,23 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                         type: "cart" as const,
                         shippingAddress,
                         specialRequirements,
-                        items: items!.map((item) => ({
+                        items: items!.map((item) => {
+                            const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+                            const agentPct = Number(item.discount_percentage) || 0;
+                            const slab = pickApplicableSlab(item.discount_slabs, item.quantity);
+                            const slabPct = slab?.discount_percentage ?? 0;
+                            const discountedUnit = price * (1 - agentPct / 100) * (1 - slabPct / 100);
+                            // Combined % to persist on the order line, rounded
+                            // to 2 dp so it round-trips through numeric(5,2).
+                            const combinedPct =
+                                Math.round((1 - (1 - agentPct / 100) * (1 - slabPct / 100)) * 10000) / 100;
+                            return {
                             product_id: item.product_id || item.id,
                             supplier_id: item.supplier_id || item.product?.supplier_id,
                             quantity: item.quantity,
-                            unit_price: parseFloat(item.price_per_unit || item.product?.price_per_unit || "0"),
-                            total_price: parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * item.quantity,
+                            unit_price: discountedUnit,
+                            total_price: discountedUnit * item.quantity,
+                            discount_percentage: combinedPct,
                             product_snapshot: {
                                 name: item.name || item.product?.name,
                                 category: item.category || item.product?.category,
@@ -135,7 +186,8 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                                 origin_country: item.origin_country || item.product?.origin_country,
                                 unit_type: item.unit_type || item.product?.unit_type,
                             },
-                        })),
+                            };
+                        }),
                     }
                     : product
                         ? {
@@ -171,12 +223,21 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
         }
 
         if (isCartCheckout) {
-            const orderItems = items.map(item => ({
+            const orderItems = items.map(item => {
+                const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+                const agentPct = Number(item.discount_percentage) || 0;
+                const slab = pickApplicableSlab(item.discount_slabs, item.quantity);
+                const slabPct = slab?.discount_percentage ?? 0;
+                const discountedUnit = price * (1 - agentPct / 100) * (1 - slabPct / 100);
+                const combinedPct =
+                    Math.round((1 - (1 - agentPct / 100) * (1 - slabPct / 100)) * 10000) / 100;
+                return {
                 product_id: item.product_id || item.id,
                 supplier_id: item.supplier_id || item.product?.supplier_id,
                 quantity: item.quantity,
-                unit_price: parseFloat(item.price_per_unit || item.product?.price_per_unit || "0"),
-                total_price: parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * item.quantity,
+                unit_price: discountedUnit,
+                total_price: discountedUnit * item.quantity,
+                discount_percentage: combinedPct,
                 product_snapshot: {
                     name: item.name || item.product?.name,
                     category: item.category || item.product?.category,
@@ -189,7 +250,8 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                 shipping_address: shippingAddress,
                 payment_method: paymentMethod,
                 date_time: now,
-            }));
+                };
+            });
 
             const { error: submitError } = await createOrderWithItems({
                 shipping_address: shippingAddress,
@@ -308,7 +370,16 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
 
                                 <div className="space-y-4">
                                     {isCartCheckout ? (
-                                        items.map((item, idx) => (
+                                        items.map((item, idx) => {
+                                            const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+                                            const agentPct = Number(item.discount_percentage) || 0;
+                                            const slab = pickApplicableSlab(item.discount_slabs, item.quantity);
+                                            const slabPct = slab?.discount_percentage ?? 0;
+                                            const nextSlab = pickNextSlab(item.discount_slabs, item.quantity);
+                                            const gross = price * item.quantity;
+                                            const net = gross * (1 - agentPct / 100) * (1 - slabPct / 100);
+                                            const hasDiscount = agentPct > 0 || slabPct > 0;
+                                            return (
                                             <div key={idx} className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl">
                                                 <div className="w-12 h-12 bg-gradient-to-br from-[#EA7B7B] to-[#d96a6a] rounded-xl flex items-center justify-center text-white text-xl flex-shrink-0">
                                                     {(item.name || item.product?.name)?.charAt(0)}
@@ -320,14 +391,43 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                                                     <p className="text-xs text-gray-500">
                                                         Qty: {item.quantity} {item.unit_type || item.product?.unit_type}
                                                     </p>
+                                                    <div className="flex flex-wrap gap-1 mt-1">
+                                                        {agentPct > 0 && (
+                                                            <span className="inline-flex items-center px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[11px] rounded-full font-semibold">
+                                                                Agent −{agentPct}%
+                                                            </span>
+                                                        )}
+                                                        {slabPct > 0 && slab && (
+                                                            <span className="inline-flex items-center px-2 py-0.5 bg-violet-100 text-violet-700 text-[11px] rounded-full font-semibold">
+                                                                Volume −{slabPct}% (qty ≥ {slab.minimum_slab})
+                                                            </span>
+                                                        )}
+                                                        {!slabPct && nextSlab && (
+                                                            <span className="inline-flex items-center px-2 py-0.5 bg-violet-50 text-violet-600 text-[11px] rounded-full font-medium ring-1 ring-violet-200">
+                                                                +{nextSlab.minimum_slab - item.quantity} more for {nextSlab.discount_percentage}% off
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 <div className="text-right">
-                                                    <p className="font-bold text-[#EA7B7B]">
-                                                        ₹{(parseFloat(item.price_per_unit || item.product?.price_per_unit || "0") * item.quantity).toLocaleString("en-IN")}
-                                                    </p>
+                                                    {hasDiscount ? (
+                                                        <>
+                                                            <p className="text-xs text-gray-400 line-through">
+                                                                ₹{gross.toLocaleString("en-IN")}
+                                                            </p>
+                                                            <p className="font-bold text-[#EA7B7B]">
+                                                                ₹{net.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                                            </p>
+                                                        </>
+                                                    ) : (
+                                                        <p className="font-bold text-[#EA7B7B]">
+                                                            ₹{gross.toLocaleString("en-IN")}
+                                                        </p>
+                                                    )}
                                                 </div>
                                             </div>
-                                        ))
+                                            );
+                                        })
                                     ) : product && (
                                         <>
                                             <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl">
@@ -544,6 +644,32 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                                             ₹{subtotal.toLocaleString("en-IN")}
                                         </span>
                                     </div>
+                                    {agentDiscount > 0 && (
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-emerald-600 flex items-center gap-1.5">
+                                                <span className="inline-flex items-center px-1.5 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] rounded-full font-semibold uppercase tracking-wide">
+                                                    Agent
+                                                </span>
+                                                Agent Discount
+                                            </span>
+                                            <span className="font-medium text-emerald-600">
+                                                −₹{agentDiscount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                            </span>
+                                        </div>
+                                    )}
+                                    {volumeDiscount > 0 && (
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-violet-600 flex items-center gap-1.5">
+                                                <span className="inline-flex items-center px-1.5 py-0.5 bg-violet-100 text-violet-700 text-[10px] rounded-full font-semibold uppercase tracking-wide">
+                                                    Volume
+                                                </span>
+                                                Volume Discount
+                                            </span>
+                                            <span className="font-medium text-violet-600">
+                                                −₹{volumeDiscount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                            </span>
+                                        </div>
+                                    )}
                                     <div className="flex justify-between text-sm">
                                         <span className="text-gray-500">Tax</span>
                                         <span className="font-medium text-gray-900">

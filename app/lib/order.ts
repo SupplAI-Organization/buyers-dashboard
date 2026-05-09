@@ -6,6 +6,7 @@ export interface OrderItem {
     quantity: number;
     unit_price: number;
     total_price: number;
+    discount_percentage?: number;
     product_snapshot: Record<string, any>;
     special_requirments: string;
     shipping_address: string;

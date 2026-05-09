@@ -237,6 +237,13 @@ type AddToCartOutput = {
   quantity_added: number;
   cart_quantity_after: number;
   line_total: number;
+  slabs?: { minimum_slab: number; discount_percentage: number; unlocked: boolean }[];
+  applied_slab?: { minimum_slab: number; discount_percentage: number } | null;
+  next_slab?: {
+    minimum_slab: number;
+    discount_percentage: number;
+    units_to_go: number;
+  } | null;
   error?: string;
 };
 
@@ -766,13 +773,14 @@ function MessageBubble({ message }: { message: any }) {
             {message.parts?.map((part: { type: string }, i: number) => {
               if (part.type === "text") {
                 return (
-                  <div
+                  <AssistantText
                     key={i}
-                    className="whitespace-pre-wrap rounded-2xl rounded-tl-sm bg-white px-4 py-3 text-sm text-slate-800 shadow-sm ring-1 ring-slate-200"
-                  >
-                    {(part as unknown as { text: string }).text}
-                  </div>
+                    text={(part as unknown as { text: string }).text}
+                  />
                 );
+              }
+              if (part.type === "tool-lookupKnowledge") {
+                return <LookupKnowledgePart key={i} part={part} />;
               }
               if (part.type === "tool-searchSellers") {
                 return <SearchSellersPart key={i} part={part} />;
@@ -819,6 +827,171 @@ function MessageBubble({ message }: { message: any }) {
         )}
       </div>
     </div>
+  );
+}
+
+// Parse the trailing "Sources: [KB:slug] [PRODUCT:id] ..." line from an
+// assistant reply and render the body as plain text + an array of clickable
+// citation chips. Anything we can't parse is shown verbatim.
+type Citation =
+  | { kind: "concept" | "category"; slug: string }
+  | { kind: "product" | "seller"; id: string };
+
+function parseCitations(text: string): { body: string; citations: Citation[] } {
+  // Match a final "Sources: ..." line that's the LAST line of the message.
+  const m = text.match(/\n?\s*Sources?:\s*([^\n]+)\s*$/i);
+  if (!m) return { body: text, citations: [] };
+
+  const tokens = m[1].matchAll(/\[(KB|PRODUCT|SELLER|CATEGORY):\s*([^\]\s]+)\s*\]/gi);
+  const citations: Citation[] = [];
+  for (const t of tokens) {
+    const tag = t[1].toUpperCase();
+    const value = t[2];
+    if (tag === "KB") citations.push({ kind: "concept", slug: value });
+    else if (tag === "CATEGORY") citations.push({ kind: "category", slug: value });
+    else if (tag === "PRODUCT") citations.push({ kind: "product", id: value });
+    else if (tag === "SELLER") citations.push({ kind: "seller", id: value });
+  }
+
+  if (citations.length === 0) return { body: text, citations: [] };
+  const body = text.slice(0, m.index ?? text.length).trimEnd();
+  return { body, citations };
+}
+
+function CitationChip({ c }: { c: Citation }) {
+  const base =
+    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 transition hover:shadow-sm";
+
+  // Every citation opens the KB graph focused on the node. Node ids match
+  // the prefixes used by app/lib/marketplaceGraph.ts (seller-/product-/
+  // category-) and app/lib/graph.ts (concept slug == filename without .md).
+  const kbHref = (nodeId: string) =>
+    `/dashboard/knowledgebase?node=${encodeURIComponent(nodeId)}`;
+
+  if (c.kind === "concept") {
+    return (
+      <Link
+        href={kbHref(c.slug)}
+        className={`${base} bg-indigo-50 text-indigo-700 ring-indigo-200 hover:bg-indigo-100`}
+        title={`Knowledge base: ${c.slug}`}
+      >
+        <Sparkles className="h-3 w-3" />
+        {c.slug.replace(/-/g, " ")}
+      </Link>
+    );
+  }
+  if (c.kind === "category") {
+    return (
+      <Link
+        href={kbHref(`category-${c.slug}`)}
+        className={`${base} bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100`}
+        title={`Category: ${c.slug}`}
+      >
+        <Tag className="h-3 w-3" />
+        {c.slug}
+      </Link>
+    );
+  }
+  if (c.kind === "product") {
+    return (
+      <Link
+        href={kbHref(`product-${c.id}`)}
+        className={`${base} bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100`}
+        title={`Product ${c.id}`}
+      >
+        <Package className="h-3 w-3" />
+        product · {c.id.slice(0, 6)}
+      </Link>
+    );
+  }
+  if (c.kind === "seller") {
+    return (
+      <Link
+        href={kbHref(`seller-${c.id}`)}
+        className={`${base} bg-sky-50 text-sky-700 ring-sky-200 hover:bg-sky-100`}
+        title={`Seller ${c.id}`}
+      >
+        <Building2 className="h-3 w-3" />
+        seller · {c.id.slice(0, 6)}
+      </Link>
+    );
+  }
+  return null;
+}
+
+function AssistantText({ text }: { text: string }) {
+  const { body, citations } = parseCitations(text);
+  return (
+    <div className="rounded-2xl rounded-tl-sm bg-white px-4 py-3 text-sm text-slate-800 shadow-sm ring-1 ring-slate-200">
+      <div className="whitespace-pre-wrap">{body}</div>
+      {citations.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            Sources
+          </span>
+          {citations.map((c, i) => (
+            <CitationChip key={i} c={c} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LookupKnowledgePart({ part }: { part: { type: string } }) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = part as any;
+  const state: string = p.state ?? "";
+  const input = p.input as { query?: string } | undefined;
+
+  if (state === "input-streaming" || state === "input-available") {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+        <Sparkles className="h-3.5 w-3.5 animate-pulse" />
+        Looking up
+        {input?.query ? <span className="font-medium">“{input.query}”</span> : null}
+        in knowledge base & marketplace…
+      </div>
+    );
+  }
+  if (state === "output-error") {
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+        Lookup failed: {String(p.errorText ?? "unknown error")}
+      </div>
+    );
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const out = p.output as { count?: number; hits?: any[]; query?: string } | undefined;
+  if (!out || !out.hits?.length) return null;
+
+  return (
+    <details className="group rounded-xl border border-indigo-200 bg-indigo-50/50 px-3 py-2 text-xs text-indigo-900">
+      <summary className="cursor-pointer list-none font-medium flex items-center gap-2">
+        <Sparkles className="h-3.5 w-3.5" />
+        Retrieved {out.count} source{out.count === 1 ? "" : "s"} for “{out.query}”
+        <span className="ml-auto text-indigo-500 group-open:rotate-180 transition-transform">▾</span>
+      </summary>
+      <ul className="mt-2 space-y-1.5">
+        {out.hits.map((h, i) => (
+          <li key={i} className="rounded-md bg-white/70 px-2 py-1.5 ring-1 ring-indigo-100">
+            <div className="flex items-center gap-1.5">
+              <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-indigo-700">
+                {h.kind}
+              </span>
+              <span className="font-medium text-slate-900">
+                {h.title || h.name || h.business_name || h.slug || h.id}
+              </span>
+            </div>
+            {h.excerpt && (
+              <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600 line-clamp-2">
+                {h.excerpt}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -1501,33 +1674,82 @@ function AddToCartPart({ part }: { part: { type: string } }) {
   const out = p.output as AddToCartOutput;
   if (out.error) return <ToolError message={out.error} />;
 
+  const slabs = out.slabs ?? [];
+  const applied = out.applied_slab ?? null;
+  const next = out.next_slab ?? null;
+
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm">
-      <div className="flex h-12 w-12 flex-none items-center justify-center overflow-hidden rounded-lg bg-white ring-1 ring-emerald-200">
-        {out.product.image_url ? (
-          <ProductThumb url={out.product.image_url} alt={out.product.name} />
-        ) : (
-          <ShoppingCart className="h-5 w-5 text-emerald-500" />
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-800">
-          <BadgeCheck className="h-3.5 w-3.5" />
-          {out.action === "added" ? "Added to cart" : "Updated cart"}
+    <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm">
+      <div className="flex items-center gap-3">
+        <div className="flex h-12 w-12 flex-none items-center justify-center overflow-hidden rounded-lg bg-white ring-1 ring-emerald-200">
+          {out.product.image_url ? (
+            <ProductThumb url={out.product.image_url} alt={out.product.name} />
+          ) : (
+            <ShoppingCart className="h-5 w-5 text-emerald-500" />
+          )}
         </div>
-        <div className="mt-0.5 truncate text-sm font-semibold text-slate-900">{out.product.name}</div>
-        <div className="text-[11px] text-slate-600">
-          {out.action === "increased"
-            ? `+${out.quantity_added} ${out.product.unit_type} · now ${out.cart_quantity_after} in cart`
-            : `${out.quantity_added} ${out.product.unit_type} in cart`}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-800">
+            <BadgeCheck className="h-3.5 w-3.5" />
+            {out.action === "added" ? "Added to cart" : "Updated cart"}
+          </div>
+          <div className="mt-0.5 truncate text-sm font-semibold text-slate-900">{out.product.name}</div>
+          <div className="text-[11px] text-slate-600">
+            {out.action === "increased"
+              ? `+${out.quantity_added} ${out.product.unit_type} · now ${out.cart_quantity_after} in cart`
+              : `${out.quantity_added} ${out.product.unit_type} in cart`}
+          </div>
+        </div>
+        <div className="flex-none text-right">
+          <div className="text-xs text-slate-500">Line total</div>
+          <div className="text-sm font-semibold text-slate-900">
+            ₹{out.line_total.toLocaleString("en-IN")}
+          </div>
         </div>
       </div>
-      <div className="flex-none text-right">
-        <div className="text-xs text-slate-500">Line total</div>
-        <div className="text-sm font-semibold text-slate-900">
-          ₹{out.line_total.toLocaleString("en-IN")}
+
+      {slabs.length > 0 && (
+        <div className="mt-3 border-t border-emerald-200/60 pt-2.5">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <span className="inline-flex items-center px-1.5 py-0.5 bg-violet-100 text-violet-700 text-[10px] rounded-full font-semibold uppercase tracking-wide">
+              Volume Bonus
+            </span>
+            {applied ? (
+              <span className="text-[11px] font-medium text-violet-700">
+                Unlocked: extra {applied.discount_percentage}% off (qty ≥ {applied.minimum_slab})
+              </span>
+            ) : next ? (
+              <span className="text-[11px] font-medium text-violet-600">
+                Add {next.units_to_go} more {out.product.unit_type} for {next.discount_percentage}% off
+              </span>
+            ) : (
+              <span className="text-[11px] text-slate-500">Volume tiers from this seller</span>
+            )}
+          </div>
+          <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+            {slabs
+              .slice()
+              .sort((a, b) => a.minimum_slab - b.minimum_slab)
+              .map((s, i) => (
+                <li
+                  key={i}
+                  className={`flex items-center justify-between rounded-md px-2 py-1 text-[11px] ring-1 ${
+                    s.unlocked
+                      ? "bg-violet-100 text-violet-800 ring-violet-200 font-semibold"
+                      : "bg-white/70 text-slate-600 ring-slate-200"
+                  }`}
+                >
+                  <span>
+                    ≥ {s.minimum_slab} {out.product.unit_type}
+                  </span>
+                  <span>
+                    {s.unlocked ? "✓ " : ""}−{s.discount_percentage}%
+                  </span>
+                </li>
+              ))}
+          </ul>
         </div>
-      </div>
+      )}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import Topbar from "../homepage/components/Topbar";
 import BuyNowContent from "../homepage/components/buy/components/BuyNowContent";
 import { Loader2, ShoppingBag } from "lucide-react";
 import { getCartWithItems } from "@/lib/cartService";
+import { fetchSlabsForSuppliers } from "@/lib/discountSlabs";
 
 export default function CheckoutPage() {
     const router = useRouter();
@@ -27,13 +28,28 @@ export default function CheckoutPage() {
             try {
                 const cart = await getCartWithItems(userData.user.id);
                 if (cart && cart.items && cart.items.length > 0) {
-                    const mappedItems = cart.items.map((item: any) => ({
-                        ...item.product,
-                        id: item.product_id, // Important: use product_id for checkout to match what BuyNowContent expects
-                        supplier_id: item.product?.supplier_id,
-                        cart_item_id: item.id,
-                        quantity: item.quantity,
-                    }));
+                    const supplierIds = Array.from(
+                        new Set(
+                            cart.items
+                                .map((it: any) => it.product?.supplier_id)
+                                .filter((s: any): s is string => !!s),
+                        ),
+                    ) as string[];
+                    const slabsBySupplier = await fetchSlabsForSuppliers(supplierIds);
+
+                    const mappedItems = cart.items.map((item: any) => {
+                        const supplierId = item.product?.supplier_id;
+                        const slabs = supplierId ? slabsBySupplier.get(supplierId) ?? [] : [];
+                        return {
+                            ...item.product,
+                            id: item.product_id, // Important: use product_id for checkout to match what BuyNowContent expects
+                            supplier_id: supplierId,
+                            cart_item_id: item.id,
+                            quantity: item.quantity,
+                            discount_percentage: Number(item.discount_percentage) || 0,
+                            discount_slabs: slabs,
+                        };
+                    });
                     setCartItems(mappedItems);
                 } else {
                     router.push("/dashboard/cart");

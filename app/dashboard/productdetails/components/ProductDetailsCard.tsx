@@ -7,6 +7,7 @@ import { Product, ProductCategory } from "@/lib/product";
 import { formatPrice, parseAttributes } from "@/lib/productService";
 import { supabase } from "@/lib/supabaseClient";
 import { addToCart } from "@/lib/cartService";
+import { fetchSlabsForSupplier, type DiscountSlab } from "@/lib/discountSlabs";
 import {
   Gem,
   TreePine,
@@ -45,6 +46,20 @@ export default function ProductDetailsCard({
   const [user, setUser] = useState<any>(null);
   const [adding, setAdding] = useState(false);
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [slabs, setSlabs] = useState<DiscountSlab[]>([]);
+
+  useEffect(() => {
+    if (!product.supplier_id) return;
+    let cancelled = false;
+    fetchSlabsForSupplier(product.supplier_id)
+      .then((s) => {
+        if (!cancelled) setSlabs(s);
+      })
+      .catch((err) => console.error("[discount slabs] load failed:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [product.supplier_id]);
 
   // Chat state
   type DbMessage = {
@@ -396,6 +411,39 @@ export default function ProductDetailsCard({
                   {product.available_quantity} {product.unit_type} available
                 </span>
               </div>
+
+              {/* Volume discount slabs from this supplier */}
+              {slabs.length > 0 && (
+                <div className="mt-5 rounded-xl border border-violet-200 bg-violet-50/60 p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="inline-flex items-center px-2 py-0.5 bg-violet-100 text-violet-700 text-[11px] rounded-full font-semibold uppercase tracking-wide">
+                      Volume Bonus
+                    </span>
+                    <p className="text-sm font-medium text-violet-900">
+                      Order more, save more
+                    </p>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {slabs.map((s) => (
+                      <li
+                        key={s.id}
+                        className="flex items-center justify-between text-sm"
+                      >
+                        <span className="text-violet-800">
+                          Order ≥ <span className="font-semibold">{s.minimum_slab}</span>{" "}
+                          {product.unit_type}
+                        </span>
+                        <span className="font-bold text-violet-700">
+                          extra {s.discount_percentage}% off
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-[11px] text-violet-600/80">
+                    Applied automatically at checkout. Stacks with any agent-negotiated discount.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Action Buttons */}

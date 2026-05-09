@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import ReactMarkdown from "react-markdown";
 import {
@@ -38,6 +38,7 @@ type Mode = "concepts" | "marketplace";
 
 export default function KnowledgeBaseClient({ data }: Props) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -93,6 +94,27 @@ export default function KnowledgeBaseClient({ data }: Props) {
       cancelled = true;
     };
   }, [mode]);
+
+  // Deep-link from agent citations: ?node=<id>. Pick the mode that contains
+  // the node and select it. Re-runs when conceptData / marketData fill in so
+  // late-loaded marketplace nodes still get focused.
+  useEffect(() => {
+    const target = searchParams.get("node");
+    if (!target) return;
+    if (conceptData.details[target]) {
+      setMode("concepts");
+      setSelectedId(target);
+      return;
+    }
+    if (marketData?.details[target]) {
+      setMode("marketplace");
+      setSelectedId(target);
+      return;
+    }
+    // Not in concept graph — switch to marketplace so it loads, then this
+    // effect will rerun once marketData arrives.
+    if (mode !== "marketplace") setMode("marketplace");
+  }, [searchParams, conceptData, marketData, mode]);
 
   const refreshMarketplace = () => {
     setMarketLoading(true);

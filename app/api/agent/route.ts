@@ -9,6 +9,54 @@ import {
 import { z } from "zod";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { PRODUCT_CATEGORIES } from "@/lib/product";
+import { searchKnowledge } from "@/lib/kbRetrieval";
+import {
+  fetchSlabsForSupplier,
+  pickApplicableSlab,
+  pickNextSlab,
+} from "@/lib/discountSlabs";
+import FirecrawlApp from "@mendable/firecrawl-js";
+
+const firecrawl = process.env.FIRECRAWL_API_KEY
+  ? new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY })
+  : null;
+
+const MAX_DISCOUNT_PCT = 20;
+
+async function firecrawlSearch(query: string): Promise<string> {
+  if (!firecrawl) return "";
+  try {
+    const res = await firecrawl.search(query, { limit: 5 });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items: any[] = (res as any)?.data ?? (res as any)?.web ?? [];
+    if (!items.length) return "";
+    return items
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((r: any, i: number) => {
+        const title = r.title ?? r.metadata?.title ?? "Untitled";
+        const url = r.url ?? r.link ?? "";
+        const desc = r.description ?? r.snippet ?? r.metadata?.description ?? "";
+        return `${i + 1}. ${title}\n   ${url}\n   ${desc}`;
+      })
+      .join("\n");
+  } catch (err) {
+    console.error("[firecrawl.search] error:", err);
+    return "";
+  }
+}
+
+async function firecrawlScrape(url: string): Promise<string> {
+  if (!firecrawl) return "";
+  try {
+    const res = await firecrawl.scrape(url, { formats: ["markdown"] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const md: string = (res as any)?.markdown ?? (res as any)?.data?.markdown ?? "";
+    return md.slice(0, 4000);
+  } catch (err) {
+    console.error("[firecrawl.scrape] error:", err);
+    return "";
+  }
+}
 
 function getAuthenticatedSupabase(request: Request): SupabaseClient | null {
   const authHeader = request.headers.get("authorization");
@@ -39,6 +87,31 @@ You help buyers:
 - Hand off to the checkout page so the buyer can pay (use proceedToCheckout) — call this only when the buyer explicitly says they want to check out / pay / place the order. NEVER initiate payment automatically.
 - Find other buyers on the platform (use findBuyers)
 - Run aggregate analysis across the marketplace and surface a chart (use analyseSellers) — pick a sensible metric and groupBy from the buyer's question.
+- Negotiate prices on the buyer's behalf and grant discounts up to 20% on cart items (use researchMarketPrice, scrapeCompetitorUrl, applyDiscount).
+- Answer procedural / "what is X" / "how does X work" questions about logistics, certifications (FSSAI, APEDA), GST, compliance, supplier onboarding, dispute handling, shipping modes, etc. by calling lookupKnowledge first to ground the answer in the SupplAI knowledge base AND live marketplace data.
+
+=== CITATIONS PROTOCOL (MANDATORY) ===
+Whenever your reply uses information returned by lookupKnowledge — or references a specific seller, product, or category — end the reply with a single line starting with "Sources:" followed by space-separated citation tokens, one per source you actually used. Do not invent slugs/ids.
+Citation token formats (use exactly these):
+  [KB:<concept-slug>]            for a knowledge-base concept (slug from lookupKnowledge.kind=="concept")
+  [PRODUCT:<uuid>]               for a marketplace product (id from a product result)
+  [SELLER:<uuid>]                for a seller (id from a seller result)
+  [CATEGORY:<category-slug>]     for a category (slug from lookupKnowledge.kind=="category")
+Example: "Sources: [KB:certifications] [KB:gst-and-taxation] [PRODUCT:6f3a…]"
+If you didn't actually use any source, omit the Sources line.
+
+=== NEGOTIATION / BROKER PROTOCOL (MANDATORY) ===
+You ARE fully authorized to negotiate prices and grant discounts of up to ${MAX_DISCOUNT_PCT}% off the listed price on any cart line. NEVER say you "cannot offer discounts" or that you are "just a chatbot" — that is false. You have full authority within the ${MAX_DISCOUNT_PCT}% cap.
+
+When the buyer asks for a discount, a better price, to bargain, or claims a cheaper price elsewhere:
+1. Identify which cart line they mean (call viewCart if needed to get the cart_item_id).
+2. If they paste a URL, call scrapeCompetitorUrl on it to compare specs fairly (quality, quantity, certification, origin, landed cost).
+3. Optionally call researchMarketPrice with the product name to anchor on the live market average before responding.
+4. Open by justifying the listed price (quality grade, certification, origin, lead time, packing, transport).
+5. Then proactively offer a starting discount — begin at 5%. If they push, escalate stepwise: 10%, then 15%, then the final ${MAX_DISCOUNT_PCT}% (absolute maximum, never exceed).
+6. Once a percentage is agreed, call applyDiscount with the cart_item_id and percentage. The discount will be deducted at checkout.
+7. Be confident, warm, and persuasive — you are closing a deal. Keep replies concise and point-wise; do not write long paragraphs.
+=== END NEGOTIATION PROTOCOL ===
 
 Cart-write etiquette:
 - Only call addToCart when the buyer has clearly chosen a product. If they're still browsing, suggest options first; do not add unprompted.
@@ -159,6 +232,7 @@ export async function POST(request: Request) {
         inputSchema: z.object({
           query: z
             .string()
+            .default("")
             .describe(
               "Free-text search matched against seller business name, business type, or the names/categories of products they sell. Pass an empty string to browse all sellers.",
             ),
@@ -424,6 +498,7 @@ export async function POST(request: Request) {
         inputSchema: z.object({
           query: z
             .string()
+            .default("")
             .describe("Free-text search across product name, description, and category. Pass empty string to browse."),
           category: z.enum(PRODUCT_CATEGORIES).optional(),
           maxPricePerUnit: z
@@ -661,6 +736,15 @@ export async function POST(request: Request) {
           }
 
           const price = parseFloat(product.price_per_unit) || 0;
+
+          // Look up the supplier's volume-discount slabs so the buyer
+          // immediately sees what they've unlocked and what's within reach.
+          const slabs = product.supplier_id
+            ? await fetchSlabsForSupplier(product.supplier_id, supabase)
+            : [];
+          const applicable = pickApplicableSlab(slabs, newQuantity);
+          const next = pickNextSlab(slabs, newQuantity);
+
           return {
             action,
             product: {
@@ -673,6 +757,24 @@ export async function POST(request: Request) {
             quantity_added: qty,
             cart_quantity_after: newQuantity,
             line_total: Math.round(price * newQuantity),
+            slabs: slabs.map((s) => ({
+              minimum_slab: s.minimum_slab,
+              discount_percentage: s.discount_percentage,
+              unlocked: newQuantity >= s.minimum_slab,
+            })),
+            applied_slab: applicable
+              ? {
+                  minimum_slab: applicable.minimum_slab,
+                  discount_percentage: applicable.discount_percentage,
+                }
+              : null,
+            next_slab: next
+              ? {
+                  minimum_slab: next.minimum_slab,
+                  discount_percentage: next.discount_percentage,
+                  units_to_go: next.minimum_slab - newQuantity,
+                }
+              : null,
           };
         },
       }),
@@ -777,7 +879,7 @@ export async function POST(request: Request) {
         description:
           "Search the platform's buyers (companies that purchase raw materials). Use when the user asks to find or list buyers.",
         inputSchema: z.object({
-          query: z.string().describe("Free-text match against buyer business name or type. Empty string browses."),
+          query: z.string().default("").describe("Free-text match against buyer business name or type. Empty string browses."),
           limit: z.number().int().min(1).max(20).default(8),
         }),
         execute: async ({ query, limit }) => {
@@ -913,7 +1015,7 @@ export async function POST(request: Request) {
           }
           const { data: items } = await supabase
             .from("cart_items")
-            .select("quantity, product:products(price_per_unit)")
+            .select("quantity, discount_percentage, product:products(price_per_unit)")
             .in("cart_id", cartIds);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const rows = (items ?? []) as any[];
@@ -922,7 +1024,8 @@ export async function POST(request: Request) {
           }
           const total = rows.reduce((sum, r) => {
             const price = parseFloat(r.product?.price_per_unit ?? "0") || 0;
-            return sum + price * (r.quantity as number);
+            const pct = Number(r.discount_percentage) || 0;
+            return sum + price * (r.quantity as number) * (1 - pct / 100);
           }, 0);
           const itemCount = rows.reduce((sum, r) => sum + (r.quantity as number), 0);
 
@@ -978,7 +1081,7 @@ export async function POST(request: Request) {
           }
           const { data: items, error } = await supabase
             .from("cart_items")
-            .select("id, quantity, added_at, product:products(id, name, category, price_per_unit, unit_type, image_urls, supplier_id)")
+            .select("id, quantity, added_at, discount_percentage, product:products(id, name, category, price_per_unit, unit_type, image_urls, supplier_id)")
             .in("cart_id", cartIds);
           if (error) return { error: `Cart lookup failed: ${error.message}`, items: [] };
 
@@ -986,15 +1089,21 @@ export async function POST(request: Request) {
           const rows = (items ?? []).map((it: any) => {
             const p = it.product;
             const price = parseFloat(p?.price_per_unit ?? "0") || 0;
+            const qty = it.quantity as number;
+            const pct = Number(it.discount_percentage) || 0;
+            const gross = price * qty;
+            const lineTotal = gross * (1 - pct / 100);
             return {
               cart_item_id: it.id,
               product_id: p?.id,
               product_name: p?.name ?? "Unknown",
               category: p?.category ?? null,
-              quantity: it.quantity as number,
+              quantity: qty,
               unit_type: p?.unit_type ?? "unit",
               price_per_unit: price,
-              line_total: price * (it.quantity as number),
+              discount_percentage: pct,
+              line_total: lineTotal,
+              line_total_before_discount: gross,
               image_url: Array.isArray(p?.image_urls) ? p.image_urls[0] : p?.image_urls ?? null,
             };
           });
@@ -1004,6 +1113,142 @@ export async function POST(request: Request) {
             line_count: rows.length,
             total_value: Math.round(total),
             items: rows,
+          };
+        },
+      }),
+
+      lookupKnowledge: tool({
+        description:
+          "Retrieve relevant information from the SupplAI knowledge base AND live marketplace data to ground your answer. Returns up to `limit` ranked hits across four kinds: 'concept' (curated KB articles on logistics/certifications/GST/compliance/etc.), 'product' (live listings), 'seller' (live suppliers), and 'category'. Call this FIRST whenever the buyer asks a procedural / definitional / 'what is X' / 'how does X work' question, or when you want to back up a recommendation with live data. After calling, you MUST cite the hits you used in your reply using the [KB:slug] / [PRODUCT:id] / [SELLER:id] / [CATEGORY:slug] format on a final 'Sources:' line.",
+        inputSchema: z.object({
+          query: z
+            .string()
+            .min(2)
+            .describe(
+              "What to look up. Use the buyer's own phrasing or a concise topical search (e.g. 'FSSAI certification', 'GST inter-state shipping', 'cardamom Kerala'). Do NOT pad with stopwords.",
+            ),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(10)
+            .default(6)
+            .describe("Maximum number of hits to return."),
+        }),
+        execute: async ({ query, limit }) => {
+          const hits = await searchKnowledge(supabase, query, limit);
+          return {
+            query,
+            count: hits.length,
+            hits,
+          };
+        },
+      }),
+
+      researchMarketPrice: tool({
+        description:
+          "Search the live web for the current market/wholesale price of a product. Use this during negotiation to anchor on real-world prices before offering a discount. Returns top 5 search snippets with titles and URLs.",
+        inputSchema: z.object({
+          query: z
+            .string()
+            .describe(
+              "Search query — typically the product name plus 'wholesale price per <unit>'. Be specific (include grade or category if known).",
+            ),
+        }),
+        execute: async ({ query }) => {
+          const results = await firecrawlSearch(query);
+          if (!results) {
+            return { query, results: "", note: "No web results available." };
+          }
+          return { query, results };
+        },
+      }),
+
+      scrapeCompetitorUrl: tool({
+        description:
+          "Fetch and read the contents of a URL the buyer pasted (e.g. a competing listing on another site). Use this when the buyer claims a cheaper price is available somewhere else, so you can compare specs fairly before granting a discount. Returns markdown content (truncated).",
+        inputSchema: z.object({
+          url: z.string().url().describe("The full http(s) URL the buyer referenced."),
+        }),
+        execute: async ({ url }) => {
+          const content = await firecrawlScrape(url);
+          if (!content) {
+            return { url, content: "", note: "Could not scrape this URL." };
+          }
+          return { url, content };
+        },
+      }),
+
+      applyDiscount: tool({
+        description: `Apply a negotiated discount percentage to a single cart line. The discount is capped at ${MAX_DISCOUNT_PCT}% — any value above that is clamped down to ${MAX_DISCOUNT_PCT}. Only call this AFTER you and the buyer have agreed on a percentage during negotiation. The discount is stored on the cart_item and deducted at checkout. Use viewCart first to get the cart_item_id.`,
+        inputSchema: z.object({
+          cartItemId: z.string().describe("The cart_item id from a viewCart result."),
+          discountPercentage: z
+            .number()
+            .min(0)
+            .max(100)
+            .describe(
+              `Discount percentage to apply (0–${MAX_DISCOUNT_PCT}). Values above ${MAX_DISCOUNT_PCT} are clamped.`,
+            ),
+        }),
+        execute: async ({ cartItemId, discountPercentage }) => {
+          const buyerId = authData.user.id;
+          const pct = Math.min(
+            Math.max(0, Math.round(discountPercentage * 100) / 100),
+            MAX_DISCOUNT_PCT,
+          );
+
+          const { data: row, error: rErr } = await supabase
+            .from("cart_items")
+            .select(
+              "id, quantity, product:products(id, name, unit_type, price_per_unit, image_urls), cart:cart(buyer_id)",
+            )
+            .eq("id", cartItemId)
+            .maybeSingle();
+          if (rErr || !row) {
+            return { error: `Cart line not found: ${rErr?.message ?? "no row"}` };
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const cart = (row as any).cart;
+          if (cart?.buyer_id !== buyerId) {
+            return { error: "That cart line does not belong to you." };
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const product = (row as any).product;
+          if (!product) return { error: "Linked product missing." };
+
+          const { error: uErr } = await supabase
+            .from("cart_items")
+            .update({ discount_percentage: pct })
+            .eq("id", cartItemId);
+          if (uErr) {
+            return {
+              error: `Could not save discount: ${uErr.message}. Make sure the cart_items table has a discount_percentage column.`,
+            };
+          }
+
+          const price = parseFloat(product.price_per_unit) || 0;
+          const qty = row.quantity as number;
+          const original = price * qty;
+          const discounted = original * (1 - pct / 100);
+          return {
+            cart_item_id: cartItemId,
+            product: {
+              id: product.id,
+              name: product.name,
+              unit_type: product.unit_type,
+              image_url: Array.isArray(product.image_urls)
+                ? product.image_urls[0]
+                : product.image_urls,
+            },
+            quantity: qty,
+            unit_price: price,
+            discount_percentage: pct,
+            discount_capped: discountPercentage > MAX_DISCOUNT_PCT,
+            max_discount_percentage: MAX_DISCOUNT_PCT,
+            original_line_total: Math.round(original),
+            discounted_line_total: Math.round(discounted),
+            savings: Math.round(original - discounted),
           };
         },
       }),
