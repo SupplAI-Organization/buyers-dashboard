@@ -66,30 +66,65 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
         return 0;
     }, [isCartCheckout, items, product, quantity]);
 
+    // Supplier-level slab eligibility: aggregate each supplier's gross
+    // (list-price) cart subtotal and pick the best slab whose minimum_slab
+    // (interpreted in ₹) is met.
+    const supplierSlabPct = useMemo(() => {
+        const out = new Map<string, { pct: number; slab: DiscountSlab; subtotal: number }>();
+        if (!isCartCheckout) return out;
+        const subtotals = new Map<string, number>();
+        const slabsBySupplier = new Map<string, DiscountSlab[]>();
+        for (const item of items!) {
+            const sid = item.supplier_id || item.product?.supplier_id;
+            if (!sid) continue;
+            const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+            subtotals.set(sid, (subtotals.get(sid) ?? 0) + price * item.quantity);
+            if (item.discount_slabs?.length) slabsBySupplier.set(sid, item.discount_slabs);
+        }
+        for (const [sid, subtotal] of subtotals) {
+            const slab = pickApplicableSlab(slabsBySupplier.get(sid), subtotal);
+            if (slab) out.set(sid, { pct: slab.discount_percentage, slab, subtotal });
+        }
+        return out;
+    }, [isCartCheckout, items]);
+
+    const supplierSubtotals = useMemo(() => {
+        const out = new Map<string, number>();
+        if (!isCartCheckout) return out;
+        for (const item of items!) {
+            const sid = item.supplier_id || item.product?.supplier_id;
+            if (!sid) continue;
+            const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+            out.set(sid, (out.get(sid) ?? 0) + price * item.quantity);
+        }
+        return out;
+    }, [isCartCheckout, items]);
+
+    // Each line gets max(agentPct, slabPct). Attribute the rupee value of the
+    // winning rule to its summary row so Agent + Volume sum to total discount.
     const agentDiscount = useMemo(() => {
         if (!isCartCheckout) return 0;
         return items!.reduce((sum, item) => {
+            const sid = item.supplier_id || item.product?.supplier_id;
+            const slabPct = sid ? supplierSlabPct.get(sid)?.pct ?? 0 : 0;
+            const agentPct = Number(item.discount_percentage) || 0;
+            if (agentPct === 0 || agentPct < slabPct) return sum;
             const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
-            const pct = Number(item.discount_percentage) || 0;
-            return sum + price * item.quantity * (pct / 100);
+            return sum + price * item.quantity * (agentPct / 100);
         }, 0);
-    }, [isCartCheckout, items]);
+    }, [isCartCheckout, items, supplierSlabPct]);
 
     const volumeDiscount = useMemo(() => {
         if (!isCartCheckout) return 0;
         return items!.reduce((sum, item) => {
-            const slabs: DiscountSlab[] | undefined = item.discount_slabs;
-            const slab = pickApplicableSlab(slabs, item.quantity);
-            if (!slab) return sum;
-            const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+            const sid = item.supplier_id || item.product?.supplier_id;
+            const slabPct = sid ? supplierSlabPct.get(sid)?.pct ?? 0 : 0;
             const agentPct = Number(item.discount_percentage) || 0;
-            // Slab applies on top of the agent-discounted unit price so the
-            // two stack additively in money terms (matches how it's persisted
-            // to order_items below).
-            const afterAgent = price * (1 - agentPct / 100);
-            return sum + afterAgent * item.quantity * (slab.discount_percentage / 100);
+            if (slabPct === 0 || slabPct <= agentPct) return sum;
+            const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
+            return sum + price * item.quantity * (slabPct / 100);
         }, 0);
-    }, [isCartCheckout, items]);
+    }, [isCartCheckout, items, supplierSlabPct]);
 
     const discountedSubtotal = subtotal - agentDiscount - volumeDiscount;
     const tax = discountedSubtotal * 0.18;
@@ -125,15 +160,16 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                     ? items!.map((item) => {
                         const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
                         const agentPct = Number(item.discount_percentage) || 0;
-                        const slab = pickApplicableSlab(item.discount_slabs, item.quantity);
-                        const slabPct = slab?.discount_percentage ?? 0;
-                        const discountedUnit = price * (1 - agentPct / 100) * (1 - slabPct / 100);
+                        const sid = item.supplier_id || item.product?.supplier_id;
+                        const slabPct = sid ? supplierSlabPct.get(sid)?.pct ?? 0 : 0;
+                        const effectivePct = Math.max(agentPct, slabPct);
+                        const discountedUnit = price * (1 - effectivePct / 100);
                         const baseName = item.name || item.product?.name || "Item";
-                        const tags: string[] = [];
-                        if (agentPct > 0) tags.push(`Agent −${agentPct}%`);
-                        if (slabPct > 0) tags.push(`Volume −${slabPct}%`);
+                        const tag = agentPct >= slabPct
+                            ? (agentPct > 0 ? `Agent −${agentPct}%` : "")
+                            : `Volume −${slabPct}%`;
                         return {
-                            name: tags.length ? `${baseName} (${tags.join(", ")})` : baseName,
+                            name: tag ? `${baseName} (${tag})` : baseName,
                             unit_amount: Math.round(discountedUnit * 118),
                             quantity: item.quantity,
                         };
@@ -164,13 +200,10 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                         items: items!.map((item) => {
                             const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
                             const agentPct = Number(item.discount_percentage) || 0;
-                            const slab = pickApplicableSlab(item.discount_slabs, item.quantity);
-                            const slabPct = slab?.discount_percentage ?? 0;
-                            const discountedUnit = price * (1 - agentPct / 100) * (1 - slabPct / 100);
-                            // Combined % to persist on the order line, rounded
-                            // to 2 dp so it round-trips through numeric(5,2).
-                            const combinedPct =
-                                Math.round((1 - (1 - agentPct / 100) * (1 - slabPct / 100)) * 10000) / 100;
+                            const sid = item.supplier_id || item.product?.supplier_id;
+                            const slabPct = sid ? supplierSlabPct.get(sid)?.pct ?? 0 : 0;
+                            const combinedPct = Math.max(agentPct, slabPct);
+                            const discountedUnit = price * (1 - combinedPct / 100);
                             return {
                             product_id: item.product_id || item.id,
                             supplier_id: item.supplier_id || item.product?.supplier_id,
@@ -226,11 +259,10 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
             const orderItems = items.map(item => {
                 const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
                 const agentPct = Number(item.discount_percentage) || 0;
-                const slab = pickApplicableSlab(item.discount_slabs, item.quantity);
-                const slabPct = slab?.discount_percentage ?? 0;
-                const discountedUnit = price * (1 - agentPct / 100) * (1 - slabPct / 100);
-                const combinedPct =
-                    Math.round((1 - (1 - agentPct / 100) * (1 - slabPct / 100)) * 10000) / 100;
+                const sid = item.supplier_id || item.product?.supplier_id;
+                const slabPct = sid ? supplierSlabPct.get(sid)?.pct ?? 0 : 0;
+                const combinedPct = Math.max(agentPct, slabPct);
+                const discountedUnit = price * (1 - combinedPct / 100);
                 return {
                 product_id: item.product_id || item.id,
                 supplier_id: item.supplier_id || item.product?.supplier_id,
@@ -373,12 +405,17 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                                         items.map((item, idx) => {
                                             const price = parseFloat(item.price_per_unit || item.product?.price_per_unit || "0");
                                             const agentPct = Number(item.discount_percentage) || 0;
-                                            const slab = pickApplicableSlab(item.discount_slabs, item.quantity);
-                                            const slabPct = slab?.discount_percentage ?? 0;
-                                            const nextSlab = pickNextSlab(item.discount_slabs, item.quantity);
+                                            const sid = item.supplier_id || item.product?.supplier_id;
+                                            const slabEntry = sid ? supplierSlabPct.get(sid) : undefined;
+                                            const slabPct = slabEntry?.pct ?? 0;
+                                            const slab = slabEntry?.slab ?? null;
+                                            const supplierSubtotal = sid ? supplierSubtotals.get(sid) ?? 0 : 0;
+                                            const nextSlab = pickNextSlab(item.discount_slabs, supplierSubtotal);
+                                            const effectivePct = Math.max(agentPct, slabPct);
+                                            const agentWins = agentPct >= slabPct;
                                             const gross = price * item.quantity;
-                                            const net = gross * (1 - agentPct / 100) * (1 - slabPct / 100);
-                                            const hasDiscount = agentPct > 0 || slabPct > 0;
+                                            const net = gross * (1 - effectivePct / 100);
+                                            const hasDiscount = effectivePct > 0;
                                             return (
                                             <div key={idx} className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl">
                                                 <div className="w-12 h-12 bg-gradient-to-br from-[#EA7B7B] to-[#d96a6a] rounded-xl flex items-center justify-center text-white text-xl flex-shrink-0">
@@ -392,19 +429,19 @@ export default function BuyNowContent({ product, items, user }: BuyNowContentPro
                                                         Qty: {item.quantity} {item.unit_type || item.product?.unit_type}
                                                     </p>
                                                     <div className="flex flex-wrap gap-1 mt-1">
-                                                        {agentPct > 0 && (
+                                                        {agentPct > 0 && agentWins && (
                                                             <span className="inline-flex items-center px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[11px] rounded-full font-semibold">
                                                                 Agent −{agentPct}%
                                                             </span>
                                                         )}
-                                                        {slabPct > 0 && slab && (
+                                                        {slabPct > 0 && !agentWins && slab && (
                                                             <span className="inline-flex items-center px-2 py-0.5 bg-violet-100 text-violet-700 text-[11px] rounded-full font-semibold">
-                                                                Volume −{slabPct}% (qty ≥ {slab.minimum_slab})
+                                                                Volume −{slabPct}% (supplier ≥ ₹{slab.minimum_slab.toLocaleString("en-IN")})
                                                             </span>
                                                         )}
                                                         {!slabPct && nextSlab && (
                                                             <span className="inline-flex items-center px-2 py-0.5 bg-violet-50 text-violet-600 text-[11px] rounded-full font-medium ring-1 ring-violet-200">
-                                                                +{nextSlab.minimum_slab - item.quantity} more for {nextSlab.discount_percentage}% off
+                                                                +₹{Math.max(0, nextSlab.minimum_slab - supplierSubtotal).toLocaleString("en-IN")} more from this supplier for {nextSlab.discount_percentage}% off
                                                             </span>
                                                         )}
                                                     </div>
