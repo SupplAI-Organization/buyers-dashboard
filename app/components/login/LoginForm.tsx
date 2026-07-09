@@ -103,6 +103,15 @@ export default function LoginForm() {
     }
   };
 
+  const DEMO_EMAIL = "test@test.com";
+  const DEMO_PASSWORD = "test123";
+
+  const fillDemoCredentials = () => {
+    setIsLogin(true);
+    setEmail(DEMO_EMAIL);
+    setPassword(DEMO_PASSWORD);
+  };
+
   const handleAzureLogin = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "azure",
@@ -183,6 +192,27 @@ export default function LoginForm() {
                 : "Get started with SupplAI today"}
             </p>
           </div>
+
+          {/* Demo credentials (test application, not for production use) */}
+          {isLogin && (
+            <div className="border border-dashed border-[#EA7B7B]/50 rounded-xl p-4 bg-[#EA7B7B]/5 space-y-2">
+              <p className="text-sm font-medium text-gray-700">
+                Demo login (test application)
+              </p>
+              <p className="text-sm text-gray-600">
+                Email: <span className="font-mono">{DEMO_EMAIL}</span>
+                <br />
+                Password: <span className="font-mono">{DEMO_PASSWORD}</span>
+              </p>
+              <button
+                type="button"
+                onClick={fillDemoCredentials}
+                className="text-sm font-medium text-[#EA7B7B] hover:text-[#d96a6a]"
+              >
+                Use demo account
+              </button>
+            </div>
+          )}
 
           {/* Toggle */}
           <div className="flex bg-gray-100 rounded-full p-1">
